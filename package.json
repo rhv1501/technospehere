@@ -6,16 +6,28 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "seed:prod": "node scripts/seed-production.js"
   },
   "dependencies": {
+    "@supabase/ssr": "^0.12.5",
+    "@supabase/supabase-js": "^2.115.0",
+    "@types/pg": "^8.23.1",
+    "clsx": "^2.1.1",
+    "lucide-react": "^1.40.0",
     "next": "16.3.4",
+    "nodemailer": "^9.1.1",
+    "pg": "^8.23.0",
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "sonner": "^2.0.8",
+    "tailwind-merge": "^3.6.0",
+    "zod": "^4.5.4"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
+    "@types/nodemailer": "^8.0.1",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
