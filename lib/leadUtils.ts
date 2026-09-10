@@ -63,6 +63,17 @@ export function parseLineItemsFromLead(lead: {
   ];
 }
 
+/**
+ * Cleans product item string by removing automated "(+X additional items)" suffixes.
+ */
+export function cleanProductTitle(rawTitle?: string | null): string {
+  if (!rawTitle) return 'Unspecified Item';
+  return rawTitle
+    .replace(/\s*\(\+\d+\s+additional\s+items?\)/gi, '')
+    .replace(/\s*\(\+\d+\s+more\s+items?\)/gi, '')
+    .trim();
+}
+
 export function formatLineItemsToPayload(items: LeadLineItem[], generalNotes: string = '') {
   if (!items || items.length === 0) {
     return {
@@ -81,16 +92,13 @@ export function formatLineItemsToPayload(items: LeadLineItem[], generalNotes: st
   );
   const avgUnitPrice = totalQty > 0 && totalVal > 0 ? totalVal / totalQty : primary.unit_price_estimate;
 
-  const itemSummaryTitle =
-    items.length === 1
-      ? primary.product_item || 'Procurement Item'
-      : `${primary.product_item || 'Item'} (+${items.length - 1} additional item${items.length > 2 ? 's' : ''})`;
+  const itemSummaryTitle = cleanProductTitle(primary.product_item) || 'Procurement Item';
 
   const formattedSpecsText = items
     .map(
       (it, idx) =>
         `Line Item #${idx + 1}: ${it.product_item || 'N/A'}\n- Quantity: ${it.quantity} unit(s)\n- Est. Unit Price: ${
-          it.unit_price_estimate ? `₹${Number(it.unit_price_estimate).toLocaleString('en-IN')}` : 'TBD'
+          it.unit_price_estimate ? `INR ${Number(it.unit_price_estimate).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : 'TBD'
         }${it.specifications ? `\n- Specs: ${it.specifications}` : ''}`
     )
     .join('\n\n');
@@ -108,8 +116,43 @@ export function formatLineItemsToPayload(items: LeadLineItem[], generalNotes: st
 }
 
 /**
+ * Formats a clean summary string of line items with quantities and unit rates for header/summary blocks.
+ */
+export function formatLineItemsSummaryText(lead: {
+  product_item: string;
+  quantity: number;
+  unit_price_estimate?: number | null;
+  specifications?: string | null;
+}): string {
+  if (!lead) return 'N/A';
+  const items = parseLineItemsFromLead(lead);
+
+  if (items.length === 1 && !lead.specifications?.includes('<!-- LINE_ITEMS_JSON:')) {
+    const item = items[0];
+    const cleanTitle = cleanProductTitle(item.product_item || lead.product_item);
+    const qty = item.quantity || lead.quantity || 1;
+    const rate = item.unit_price_estimate || lead.unit_price_estimate;
+    const rateText = rate
+      ? ` @ INR ${Number(rate).toLocaleString('en-IN', { minimumFractionDigits: 2 })}/unit`
+      : '';
+    return `${cleanTitle} (${qty} unit${qty > 1 ? 's' : ''}${rateText})`;
+  }
+
+  return items
+    .map((it, idx) => {
+      const cleanTitle = cleanProductTitle(it.product_item);
+      const qty = it.quantity || 1;
+      const rateText = it.unit_price_estimate
+        ? ` @ INR ${Number(it.unit_price_estimate).toLocaleString('en-IN', { minimumFractionDigits: 2 })}/unit`
+        : '';
+      return `${idx + 1}. ${cleanTitle} — ${qty} unit${qty > 1 ? 's' : ''}${rateText}`;
+    })
+    .join('\n');
+}
+
+/**
  * Format line items & specifications cleanly for human-readable outputs (Email, WhatsApp, UI display)
- * without exposing raw HTML comments or JSON tags.
+ * presenting every line item with Item Name, Quantity, Unit Rate, Line Total, and Specifications.
  */
 export function formatReadableSpecifications(lead: {
   product_item: string;
@@ -121,24 +164,27 @@ export function formatReadableSpecifications(lead: {
   const items = parseLineItemsFromLead(lead);
   const cleanNotes = cleanSpecifications(lead.specifications);
 
-  if (items.length === 1 && !lead.specifications?.includes('<!-- LINE_ITEMS_JSON:')) {
-    return cleanNotes || lead.specifications || 'Standard specifications';
-  }
-
   const lines = items.map((it, idx) => {
-    let line = `${idx + 1}. ${it.product_item} (Qty: ${it.quantity})`;
+    const cleanTitle = cleanProductTitle(it.product_item);
+    const qty = it.quantity || 1;
+    let line = `${idx + 1}. ${cleanTitle}\n   • Quantity: ${qty} unit${qty > 1 ? 's' : ''}`;
+    
     if (it.unit_price_estimate) {
-      line += ` — Est. Price: ₹${Number(it.unit_price_estimate).toLocaleString('en-IN')}`;
+      const unitRate = Number(it.unit_price_estimate);
+      const lineTotal = qty * unitRate;
+      line += `\n   • Target Unit Rate: INR ${unitRate.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+      line += `  |  Est. Line Total: INR ${lineTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
     }
+    
     if (it.specifications?.trim()) {
-      line += `\n   Specs: ${it.specifications.trim()}`;
+      line += `\n   • Specifications: ${it.specifications.trim()}`;
     }
     return line;
   });
 
-  let result = lines.join('\n');
+  let result = lines.join('\n\n');
   if (cleanNotes) {
-    result += `\n\nNotes / Terms:\n${cleanNotes}`;
+    result += `\n\n---------------------------------------------------------\nGeneral Terms / Remarks:\n${cleanNotes}`;
   }
 
   return result;

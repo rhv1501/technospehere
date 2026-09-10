@@ -131,6 +131,7 @@ export function CreateLeadModal({
     if (e.target.files) {
       const filesArray = Array.from(e.target.files);
       setSelectedFiles((prev) => [...prev, ...filesArray]);
+      e.target.value = '';
     }
   };
 
@@ -190,24 +191,38 @@ export function CreateLeadModal({
     const leadId = res.lead.id;
 
     if (selectedFiles.length > 0) {
+      let uploadSuccessCount = 0;
       for (const file of selectedFiles) {
         try {
           const base64Data = await fileToBase64(file);
-          await uploadLeadAttachment({
+          const uploadRes = await uploadLeadAttachment({
             leadId,
             fileName: file.name,
             fileType: file.type || 'application/octet-stream',
             fileSize: file.size,
             base64Data,
           });
-        } catch (err) {
+
+          if (uploadRes.success) {
+            uploadSuccessCount++;
+          } else {
+            console.error(`Upload error for "${file.name}":`, uploadRes.error);
+            toast.error(`Upload error for "${file.name}": ${uploadRes.error}`);
+          }
+        } catch (err: any) {
           console.error(`Failed to upload ${file.name}:`, err);
+          toast.error(`Failed to upload "${file.name}": ${err.message || 'Unknown error'}`);
         }
+      }
+
+      if (uploadSuccessCount > 0) {
+        toast.success(`${uploadSuccessCount} attachment(s) uploaded successfully!`);
       }
     }
 
     setLoading(false);
     toast.success(`Lead "${res.lead.lead_number}" with ${lineItems.length} line item(s) created!`);
+    setSelectedFiles([]);
     onSuccess(leadId);
     onClose();
   };

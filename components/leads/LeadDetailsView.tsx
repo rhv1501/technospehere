@@ -25,6 +25,9 @@ import {
   Package,
   Building2,
   Shield,
+  Download,
+  Eye,
+  FileCheck,
 } from 'lucide-react';
 import {
   assignVendorsToLead,
@@ -36,7 +39,7 @@ import {
   deleteLead,
 } from '@/actions/leads';
 import { formatDate, formatCurrency, formatFileSize, fileToBase64 } from '@/lib/utils';
-import { parseLineItemsFromLead, cleanSpecifications, formatReadableSpecifications } from '@/lib/leadUtils';
+import { parseLineItemsFromLead, cleanSpecifications, formatReadableSpecifications, cleanProductTitle, formatLineItemsSummaryText } from '@/lib/leadUtils';
 import { toast } from 'sonner';
 
 interface LeadDetailsViewProps {
@@ -328,7 +331,7 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
             <div className="flex items-center space-x-4 bg-slate-50 dark:bg-slate-900/80 p-3 rounded-xl border border-slate-200 dark:border-slate-800 text-xs">
               <div>
                 <span className="text-slate-500 dark:text-slate-400 block font-bold">Product</span>
-                <span className="font-extrabold text-slate-900 dark:text-slate-200">{lead.product_item}</span>
+                <span className="font-extrabold text-slate-900 dark:text-slate-200">{cleanProductTitle(lead.product_item)}</span>
               </div>
               <div className="h-6 w-px bg-slate-200 dark:bg-slate-800" />
               <div>
@@ -344,8 +347,30 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
               </div>
             </div>
 
-            {/* Edit / Delete Buttons */}
-            <div className="flex items-center space-x-2 shrink-0">
+            {/* Edit / Delete / PDF Download Buttons */}
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <a
+                href={`/api/leads/${lead.id}/pdf?download=1`}
+                target="_blank"
+                rel="noreferrer"
+                className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-extrabold text-xs flex items-center space-x-1.5 transition-all shadow-md shadow-indigo-600/20 hover:scale-[1.02] active:scale-[0.98]"
+                title="Download official RFQ PDF"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Download RFQ PDF</span>
+              </a>
+
+              <a
+                href={`/api/leads/${lead.id}/pdf`}
+                target="_blank"
+                rel="noreferrer"
+                className="px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-900 hover:bg-slate-200 dark:hover:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 font-extrabold text-xs flex items-center space-x-1.5 transition-colors shadow-xs"
+                title="Preview RFQ PDF document in browser"
+              >
+                <Eye className="w-3.5 h-3.5 text-slate-500" />
+                <span>Preview</span>
+              </a>
+
               {!isEditing ? (
                 <button
                   onClick={() => setIsEditing(true)}
@@ -370,7 +395,7 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
                 title="Delete Lead"
               >
                 <Trash2 className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400" />
-                <span>Delete Lead</span>
+                <span>Delete</span>
               </button>
             </div>
           </div>
@@ -1053,7 +1078,7 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
             {/* Generated Email Document Preview */}
             <div className="bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-4 font-mono text-xs text-slate-900 dark:text-slate-200 leading-relaxed shadow-inner">
               <div className="border-b border-slate-200 dark:border-slate-800 pb-3 text-indigo-800 dark:text-indigo-300 font-extrabold text-sm">
-                SUBJECT: Request for Quotation — {lead.lead_number} ({lead.product_item})
+                SUBJECT: Request for Quotation — {lead.lead_number} ({cleanProductTitle(lead.product_item)})
               </div>
 
               <div>
@@ -1071,13 +1096,11 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
                     <span className="text-slate-500 dark:text-slate-400 block font-bold">Client Ref:</span>
                     <span className="text-slate-900 dark:text-slate-200 font-bold">{lead.lead_name}</span>
                   </div>
-                  <div>
-                    <span className="text-slate-500 dark:text-slate-400 block font-bold">Product / Item:</span>
-                    <span className="text-slate-900 dark:text-slate-100 font-extrabold">{lead.product_item}</span>
-                  </div>
-                  <div>
-                    <span className="text-slate-500 dark:text-slate-400 block font-bold">Quantity:</span>
-                    <span className="text-indigo-700 dark:text-indigo-400 font-extrabold">{lead.quantity} units</span>
+                  <div className="col-span-2">
+                    <span className="text-slate-500 dark:text-slate-400 block font-bold mb-0.5">Product / Requirement Breakdown:</span>
+                    <div className="text-slate-900 dark:text-slate-100 font-extrabold whitespace-pre-line text-xs">
+                      {formatLineItemsSummaryText(lead)}
+                    </div>
                   </div>
                   <div>
                     <span className="text-slate-500 dark:text-slate-400 block font-bold">Required Due Date:</span>
@@ -1128,6 +1151,40 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
                   </div>
                 </div>
               )}
+
+              {/* RFQ PDF DOCUMENT BANNER */}
+              <div className="p-4 bg-indigo-50/80 dark:bg-indigo-950/40 rounded-xl border border-indigo-200/80 dark:border-indigo-500/30 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
+                    <FileCheck className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                    <div>
+                      <h4 className="font-extrabold text-xs text-indigo-950 dark:text-indigo-200">
+                        Official RFQ PDF Attachment
+                      </h4>
+                    </div>
+                  </div>
+                  <div className="flex items-center space-x-2 shrink-0">
+                    <a
+                      href={`/api/leads/${lead.id}/pdf`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="px-2.5 py-1.5 bg-white dark:bg-slate-900 border border-indigo-200 dark:border-indigo-500/30 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-900/50 rounded-lg text-xs font-bold flex items-center space-x-1 transition-colors shadow-xs"
+                    >
+                      <Eye className="w-3 h-3" />
+                      <span>Preview</span>
+                    </a>
+                    <a
+                      href={`/api/leads/${lead.id}/pdf?download=1`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold flex items-center space-x-1 transition-all shadow-sm"
+                    >
+                      <Download className="w-3 h-3" />
+                      <span>Download PDF</span>
+                    </a>
+                  </div>
+                </div>
+              </div>
 
               <div>
                 <span className="text-slate-700 dark:text-slate-400 block font-bold mb-1">REMARKS & SPECIAL NOTES:</span>

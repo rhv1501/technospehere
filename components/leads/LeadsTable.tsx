@@ -12,6 +12,7 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 import { formatDate } from '@/lib/utils';
+import { cleanProductTitle } from '@/lib/leadUtils';
 import { deleteLead } from '@/actions/leads';
 import { toast } from 'sonner';
 
@@ -182,7 +183,7 @@ export function LeadsTable({ leads, categories, onOpenCreateModal }: LeadsTableP
                       <div className="font-medium text-slate-900 dark:text-slate-100">{lead.customer_name}</div>
                     </td>
                     <td className="px-4 py-3">
-                      <div className="font-medium text-slate-900 dark:text-slate-200">{lead.product_item}</div>
+                      <div className="font-medium text-slate-900 dark:text-slate-200">{cleanProductTitle(lead.product_item)}</div>
                       <div className="text-slate-500 dark:text-slate-400 text-[11px]">
                         Qty: {lead.quantity}
                       </div>

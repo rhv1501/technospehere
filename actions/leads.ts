@@ -3,8 +3,9 @@
 import { createAdminClient } from '@/lib/supabase/admin';
 import { generateLeadNumber } from '@/lib/utils';
 import { revalidatePath } from 'next/cache';
-import { formatReadableSpecifications } from '@/lib/leadUtils';
+import { formatReadableSpecifications, cleanProductTitle } from '@/lib/leadUtils';
 import { getSystemSettings } from '@/actions/settings';
+import { ensureLeadRfqPdfInSupabase } from '@/actions/rfqPdf';
 import nodemailer from 'nodemailer';
 
 export interface LeadInput {
@@ -405,11 +406,17 @@ export async function sendLeadToVendors(leadId: string, vendorIds: string[]) {
 
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'http://127.0.0.1:54321';
 
+    // Ensure fresh RFQ PDF is generated and synced to Supabase Storage
+    const rfqPdfRes = await ensureLeadRfqPdfInSupabase(leadId);
+    const rfqPdfBuffer = rfqPdfRes.success ? rfqPdfRes.buffer : null;
+    const rfqPdfPublicUrl = rfqPdfRes.success ? rfqPdfRes.publicUrl : null;
+    const rfqFileName = rfqPdfRes.success ? rfqPdfRes.fileName : `RFQ_${lead.lead_number}.pdf`;
+
     const attachmentLinks = (lead.lead_attachments || [])
       .map((att: any) => `- ${att.file_name}: ${supabaseUrl}/storage/v1/object/public/lead-attachments/${att.file_path}`)
       .join('\n');
 
-    const emailSubject = `Quotation Request: ${lead.lead_number} - ${lead.product_item} (${lead.lead_name})`;
+    const emailSubject = `Quotation Request: ${lead.lead_number} - ${cleanProductTitle(lead.product_item)} (${lead.lead_name})`;
 
     // Fetch system settings for SMTP configuration
     const settingsRes = await getSystemSettings();
@@ -436,6 +443,16 @@ export async function sendLeadToVendors(leadId: string, vendorIds: string[]) {
     let failedCount = 0;
     const errors: string[] = [];
 
+    // Construct Mail Attachments array
+    const mailAttachments: any[] = [];
+    if (rfqPdfBuffer) {
+      mailAttachments.push({
+        filename: rfqFileName,
+        content: rfqPdfBuffer,
+        contentType: 'application/pdf',
+      });
+    }
+
     for (const vendor of vendors) {
       const emailBody = `
 Dear ${vendor.contact_person},
@@ -443,17 +460,16 @@ Dear ${vendor.contact_person},
 We request your official quotation for the following requirement:
 
 ---------------------------------------------------------
-LEAD DETAILS
+LEAD & CLIENT REFERENCE
 ---------------------------------------------------------
 Lead ID: ${lead.lead_number}
-Customer / PO Name: ${lead.lead_name}
-Product / Item: ${lead.product_item}
-Quantity: ${lead.quantity}
+Client / PO Reference: ${lead.lead_name}
 Category: ${lead.categories?.name || 'General'}
 Required Delivery Timeline / Due Date: ${lead.due_date || 'ASAP'}
+Target GST Rate: ${lead.gst_rate || 18}%
 
 ---------------------------------------------------------
-TECHNICAL SPECIFICATIONS
+ITEMIZED REQUIREMENTS & TECHNICAL SPECIFICATIONS
 ---------------------------------------------------------
 ${formatReadableSpecifications(lead)}
 
@@ -471,9 +487,10 @@ REMARKS & ATTACHMENTS
 ---------------------------------------------------------
 ${lead.remarks || 'None'}
 
-${attachmentLinks ? `Attached Files:\n${attachmentLinks}` : ''}
+${rfqPdfPublicUrl ? `Official RFQ PDF Document: ${rfqPdfPublicUrl}` : ''}
+${attachmentLinks ? `Other Attached Files:\n${attachmentLinks}` : ''}
 
-Please submit your quotation with best pricing and lead time at your earliest convenience.
+Please find attached the official Request for Quotation (RFQ) PDF document for your records. Submit your quotation with best pricing and lead time at your earliest convenience.
 
 Best regards,
 ${fromName}
@@ -490,6 +507,7 @@ ${settings?.company_name || 'TechnoSphere Business Solutions'}
             to: vendor.email,
             subject: emailSubject,
             text: emailBody,
+            attachments: mailAttachments,
           });
           successCount++;
         } catch (err: any) {
@@ -574,22 +592,49 @@ export async function prepareWhatsAppMessage(leadId: string, vendorId: string) {
 
     if (vendorErr || !vendor) throw new Error('Vendor not found');
 
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'http://127.0.0.1:54321';
+
+    // Ensure fresh RFQ PDF is generated & stored in Supabase Storage
+    const rfqPdfRes = await ensureLeadRfqPdfInSupabase(leadId);
+    const rfqPdfPublicUrl = rfqPdfRes.success ? rfqPdfRes.publicUrl : null;
+
+    // Fetch existing lead attachments for document links
+    const { data: attachments } = await supabase
+      .from('lead_attachments')
+      .select('file_name, file_path')
+      .eq('lead_id', leadId);
+
+    const documentLinks: string[] = [];
+    if (rfqPdfPublicUrl) {
+      documentLinks.push(`📄 *Official RFQ PDF Document:* ${rfqPdfPublicUrl}`);
+    }
+
+    if (attachments && attachments.length > 0) {
+      attachments.forEach((att: any) => {
+        if (!att.file_name.startsWith('RFQ_')) {
+          documentLinks.push(`📎 *Attachment (${att.file_name}):* ${supabaseUrl}/storage/v1/object/public/lead-attachments/${att.file_path}`);
+        }
+      });
+    }
+
+    const docsText = documentLinks.length > 0
+      ? `\n\n*Attached Documents & Specifications:*\n${documentLinks.join('\n')}`
+      : '';
+
     const messageText = `*QUOTATION REQUEST - TechnoSphere*
 📌 *Lead ID:* ${lead.lead_number}
-📦 *Product:* ${lead.product_item}
-🔢 *Quantity:* ${lead.quantity}
 🏢 *Client Ref:* ${lead.lead_name}
 📅 *Due Date:* ${lead.due_date || 'ASAP'}
 
-*Specifications:*
+*Itemized Requirements & Specifications:*
 ${formatReadableSpecifications(lead)}
 
 *Commercial Terms Requested:*
 - Unit Price & GST (${lead.gst_rate || 18}%)
-- Delivery Terms: ${lead.delivery_terms || 'Standard'}
-- Warranty: ${lead.warranty || '1 Year'}
+- Delivery Terms: ${lead.delivery_terms || 'Standard shipping'}
+- Warranty: ${lead.warranty || '1 Year Standard Warranty'}${docsText}
 
-Please send your best price and estimated delivery timeline. Thank you!`;
+Please review the attached RFQ document link and send your best price and estimated delivery timeline. Thank you!`;
 
     const cleanPhone = vendor.whatsapp_number.replace(/[^0-9+]/g, '').replace(/^\+/, '');
     const webWhatsAppUrl = `https://web.whatsapp.com/send?phone=${cleanPhone}&text=${encodeURIComponent(messageText)}`;
