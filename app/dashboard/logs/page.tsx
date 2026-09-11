@@ -21,7 +21,7 @@ export default async function AuditLogsPage() {
         </p>
       </div>
 
-      <div className="bg-white dark:bg-[#111827] border border-slate-200 dark:border-slate-800/80 rounded-2xl overflow-hidden shadow-sm dark:shadow-xl">
+      <div className="bg-white dark:bg-[#111827] border border-slate-200 dark:border-slate-800/80 rounded-2xl overflow-x-auto shadow-sm dark:shadow-xl">
         <table className="w-full text-left text-xs">
           <thead className="bg-slate-50 dark:bg-[#0d1322] border-b border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400 font-bold uppercase tracking-wider">
             <tr>

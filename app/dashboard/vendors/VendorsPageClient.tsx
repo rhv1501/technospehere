@@ -67,7 +67,7 @@ export function VendorsPageClient({
       </div>
 
       {/* Tabs */}
-      <div className="flex items-center space-x-3 border-b border-slate-200 dark:border-slate-800 pb-3">
+      <div className="flex items-center gap-2 sm:gap-3 border-b border-slate-200 dark:border-slate-800 pb-3 overflow-x-auto">
         <button
           onClick={() => setActiveTab('database')}
           className={`px-4 py-2.5 rounded-xl text-xs font-extrabold flex items-center space-x-2.5 border transition-all ${

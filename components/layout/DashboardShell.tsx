@@ -18,7 +18,7 @@ export function DashboardShell({ pendingCount, children }: DashboardShellProps) 
       <RealtimeListener />
 
       {/* Desktop Sidebar */}
-      <div className="hidden md:flex shrink-0">
+      <div className="hidden md:flex shrink-0 h-screen sticky top-0">
         <AdminSidebar pendingCount={pendingCount} />
       </div>
 
