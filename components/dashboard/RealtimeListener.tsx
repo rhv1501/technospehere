@@ -34,7 +34,7 @@ export function RealtimeListener() {
         { event: 'UPDATE', schema: 'public', table: 'leads' },
         (payload) => {
           if (payload.old.status !== payload.new.status) {
-            toast.success(`Lead ${payload.new.lead_number} status updated to '${payload.new.status}'`);
+            toast.success(`RFQ ${payload.new.lead_number} status updated to '${payload.new.status}'`);
             router.refresh();
           }
         }

@@ -10,10 +10,6 @@ export interface SystemSettings {
   phone_number: string;
   office_address: string;
   gstin_number: string;
-  default_gst_rate: number;
-  available_gst_slabs: number[];
-  delivery_terms_presets: string[];
-  warranty_terms_presets: string[];
   email_subject_prefix: string;
   email_footer_note: string;
   whatsapp_header: string;
@@ -35,20 +31,6 @@ const DEFAULT_SETTINGS: SystemSettings = {
   phone_number: '+91 98765 43210',
   office_address: 'TechnoSphere Tower, Cyber Hub, Industrial Zone',
   gstin_number: '27AAAAA0000A1Z5',
-  default_gst_rate: 18.0,
-  available_gst_slabs: [0, 5, 12, 18, 28],
-  delivery_terms_presets: [
-    'Doorstep Delivery (5-7 Business Days)',
-    'Doorstep Express Delivery (48 Hours)',
-    'Ex-Works / Factory Pickup',
-    'FOB Shipping',
-  ],
-  warranty_terms_presets: [
-    '1 Year Standard Manufacturer Warranty',
-    '2 Years Onsite Warranty',
-    '3 Years Premier Support Warranty',
-    '90 Days Limited Warranty',
-  ],
   email_subject_prefix: 'Request for Quotation',
   email_footer_note: 'Please email your official quotation with price breakdown and lead time to sales@technosphere.in',
   whatsapp_header: 'QUOTATION REQUEST - TechnoSphere',

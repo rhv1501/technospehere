@@ -43,7 +43,7 @@ export function AdminSidebar({ pendingCount = 0, isMobile = false, onClose }: Ad
       count: pendingCount > 0 ? pendingCount : null,
     },
     {
-      name: 'Leads & Quotations',
+      name: 'RFQs & Quotations',
       href: '/dashboard/leads',
       icon: FileText,
     },

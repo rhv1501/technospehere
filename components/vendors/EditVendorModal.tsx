@@ -29,6 +29,9 @@ export function EditVendorModal({
     contact_person: '',
     email: '',
     whatsapp_number: '',
+    secondary_contact_person: '',
+    secondary_email: '',
+    secondary_phone: '',
     address: '',
     gst_number: '',
     notes: '',
@@ -43,6 +46,9 @@ export function EditVendorModal({
         contact_person: vendor.contact_person || '',
         email: vendor.email || '',
         whatsapp_number: vendor.whatsapp_number || '',
+        secondary_contact_person: vendor.secondary_contact_person || '',
+        secondary_email: vendor.secondary_email || '',
+        secondary_phone: vendor.secondary_phone || '',
         address: vendor.address || '',
         gst_number: vendor.gst_number || '',
         notes: vendor.notes || '',
@@ -101,49 +107,106 @@ export function EditVendorModal({
         </div>
 
         <form onSubmit={handleSubmit} className="p-6 space-y-4 max-h-[80vh] overflow-y-auto">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">Company Name</label>
-              <input
-                type="text"
-                required
-                value={formData.company_name}
-                onChange={(e) => setFormData({ ...formData, company_name: e.target.value })}
-                className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500"
-              />
-            </div>
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Company Name</label>
+            <input
+              type="text"
+              required
+              value={formData.company_name}
+              onChange={(e) => setFormData({ ...formData, company_name: e.target.value })}
+              className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500"
+            />
+          </div>
 
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">Contact Person</label>
-              <input
-                type="text"
-                required
-                value={formData.contact_person}
-                onChange={(e) => setFormData({ ...formData, contact_person: e.target.value })}
-                className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500"
-              />
+          {/* Primary Contact Person */}
+          <div className="bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-xl p-3.5 space-y-2.5">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400 uppercase tracking-wider">
+                Primary Contact Person <span className="text-rose-500">*</span>
+              </span>
+              <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300">
+                Compulsory
+              </span>
             </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">Full Name</label>
+                <input
+                  type="text"
+                  required
+                  value={formData.contact_person}
+                  onChange={(e) => setFormData({ ...formData, contact_person: e.target.value })}
+                  className="w-full px-3 py-1.5 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-xs font-semibold text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500"
+                />
+              </div>
 
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">Email Address</label>
-              <input
-                type="email"
-                required
-                value={formData.email}
-                onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500"
-              />
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">Email</label>
+                <input
+                  type="email"
+                  required
+                  value={formData.email}
+                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                  className="w-full px-3 py-1.5 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-xs font-semibold text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">WhatsApp</label>
+                <input
+                  type="text"
+                  required
+                  value={formData.whatsapp_number}
+                  onChange={(e) => setFormData({ ...formData, whatsapp_number: e.target.value })}
+                  className="w-full px-3 py-1.5 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-xs font-semibold text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500"
+                />
+              </div>
             </div>
+          </div>
 
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">WhatsApp Number</label>
-              <input
-                type="text"
-                required
-                value={formData.whatsapp_number}
-                onChange={(e) => setFormData({ ...formData, whatsapp_number: e.target.value })}
-                className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500"
-              />
+          {/* Secondary Contact Person */}
+          <div className="bg-slate-50/50 dark:bg-slate-900/40 border border-slate-200/60 dark:border-slate-800/60 rounded-xl p-3.5 space-y-2.5">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider">
+                Secondary Contact Person
+              </span>
+              <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-slate-200/70 dark:bg-slate-800 text-slate-600 dark:text-slate-400">
+                Optional
+              </span>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div>
+                <label className="block text-[11px] font-medium text-slate-600 dark:text-slate-400 mb-1">Full Name</label>
+                <input
+                  type="text"
+                  placeholder="Optional"
+                  value={formData.secondary_contact_person || ''}
+                  onChange={(e) => setFormData({ ...formData, secondary_contact_person: e.target.value })}
+                  className="w-full px-3 py-1.5 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-xs font-medium text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-medium text-slate-600 dark:text-slate-400 mb-1">Email</label>
+                <input
+                  type="email"
+                  placeholder="Optional"
+                  value={formData.secondary_email || ''}
+                  onChange={(e) => setFormData({ ...formData, secondary_email: e.target.value })}
+                  className="w-full px-3 py-1.5 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-xs font-medium text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-medium text-slate-600 dark:text-slate-400 mb-1">Phone</label>
+                <input
+                  type="text"
+                  placeholder="Optional"
+                  value={formData.secondary_phone || ''}
+                  onChange={(e) => setFormData({ ...formData, secondary_phone: e.target.value })}
+                  className="w-full px-3 py-1.5 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-xs font-medium text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500"
+                />
+              </div>
             </div>
           </div>
 

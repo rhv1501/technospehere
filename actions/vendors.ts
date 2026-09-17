@@ -8,6 +8,9 @@ export interface VendorInput {
   contact_person: string;
   email: string;
   whatsapp_number: string;
+  secondary_contact_person?: string;
+  secondary_email?: string;
+  secondary_phone?: string;
   address?: string;
   gst_number?: string;
   notes?: string;
@@ -43,7 +46,7 @@ export async function getVendors(filters?: {
 
     if (filters?.search && filters.search.trim()) {
       const s = `%${filters.search.trim()}%`;
-      query = query.or(`company_name.ilike.${s},contact_person.ilike.${s},email.ilike.${s},whatsapp_number.ilike.${s}`);
+      query = query.or(`company_name.ilike.${s},contact_person.ilike.${s},email.ilike.${s},whatsapp_number.ilike.${s},secondary_contact_person.ilike.${s},secondary_email.ilike.${s}`);
     }
 
     const { data: rawVendors, error } = await query;
@@ -76,7 +79,7 @@ export async function getVendors(filters?: {
 export async function createVendor(data: VendorInput) {
   try {
     if (!data.company_name?.trim() || !data.contact_person?.trim() || !data.email?.trim() || !data.whatsapp_number?.trim()) {
-      return { success: false, error: 'Please provide all required vendor details (Company Name, Contact Person, Email, WhatsApp Number).' };
+      return { success: false, error: 'Please provide all required vendor details (Company Name, Primary Contact Person, Email, WhatsApp Number).' };
     }
 
     const supabase = createAdminClient();
@@ -88,6 +91,9 @@ export async function createVendor(data: VendorInput) {
         contact_person: data.contact_person.trim(),
         email: data.email.trim(),
         whatsapp_number: data.whatsapp_number.trim(),
+        secondary_contact_person: data.secondary_contact_person?.trim() || null,
+        secondary_email: data.secondary_email?.trim() || null,
+        secondary_phone: data.secondary_phone?.trim() || null,
         address: data.address?.trim() || null,
         gst_number: data.gst_number?.trim() || null,
         notes: data.notes?.trim() || null,
@@ -129,6 +135,9 @@ export async function updateVendor(id: string, data: Partial<VendorInput>) {
     if (data.contact_person !== undefined) updatePayload.contact_person = data.contact_person.trim();
     if (data.email !== undefined) updatePayload.email = data.email.trim();
     if (data.whatsapp_number !== undefined) updatePayload.whatsapp_number = data.whatsapp_number.trim();
+    if (data.secondary_contact_person !== undefined) updatePayload.secondary_contact_person = data.secondary_contact_person?.trim() || null;
+    if (data.secondary_email !== undefined) updatePayload.secondary_email = data.secondary_email?.trim() || null;
+    if (data.secondary_phone !== undefined) updatePayload.secondary_phone = data.secondary_phone?.trim() || null;
     if (data.address !== undefined) updatePayload.address = data.address?.trim() || null;
     if (data.gst_number !== undefined) updatePayload.gst_number = data.gst_number?.trim() || null;
     if (data.notes !== undefined) updatePayload.notes = data.notes?.trim() || null;
@@ -201,6 +210,9 @@ export async function submitVendorRegistration(data: VendorInput) {
         contact_person: data.contact_person.trim(),
         email: data.email.trim(),
         whatsapp_number: data.whatsapp_number.trim(),
+        secondary_contact_person: data.secondary_contact_person?.trim() || null,
+        secondary_email: data.secondary_email?.trim() || null,
+        secondary_phone: data.secondary_phone?.trim() || null,
         category_ids: data.category_ids || [],
         address: data.address?.trim() || null,
         gst_number: data.gst_number?.trim() || null,
@@ -239,6 +251,9 @@ export async function approveVendorRegistration(registrationId: string) {
         contact_person: reg.contact_person,
         email: reg.email,
         whatsapp_number: reg.whatsapp_number,
+        secondary_contact_person: reg.secondary_contact_person,
+        secondary_email: reg.secondary_email,
+        secondary_phone: reg.secondary_phone,
         address: reg.address,
         gst_number: reg.gst_number,
         notes: reg.notes,

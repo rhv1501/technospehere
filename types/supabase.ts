@@ -365,6 +365,9 @@ export type Database = {
           id: string
           notes: string | null
           rejection_reason: string | null
+          secondary_contact_person: string | null
+          secondary_email: string | null
+          secondary_phone: string | null
           status: string
           updated_at: string
           vendor_id: string | null
@@ -381,6 +384,9 @@ export type Database = {
           id?: string
           notes?: string | null
           rejection_reason?: string | null
+          secondary_contact_person?: string | null
+          secondary_email?: string | null
+          secondary_phone?: string | null
           status?: string
           updated_at?: string
           vendor_id?: string | null
@@ -397,6 +403,9 @@ export type Database = {
           id?: string
           notes?: string | null
           rejection_reason?: string | null
+          secondary_contact_person?: string | null
+          secondary_email?: string | null
+          secondary_phone?: string | null
           status?: string
           updated_at?: string
           vendor_id?: string | null
@@ -412,6 +421,87 @@ export type Database = {
           },
         ]
       }
+      mfa_backup_codes: {
+        Row: {
+          created_at: string
+          code_hash: string
+          id: string
+          used: boolean
+          used_at: string | null
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          code_hash: string
+          id?: string
+          used?: boolean
+          used_at?: string | null
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          code_hash?: string
+          id?: string
+          used?: boolean
+          used_at?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
+      email_otp_challenges: {
+        Row: {
+          created_at: string
+          code_hash: string
+          expires_at: string
+          id: string
+          used: boolean
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          code_hash: string
+          expires_at: string
+          id?: string
+          used?: boolean
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          code_hash?: string
+          expires_at?: string
+          id?: string
+          used?: boolean
+          user_id?: string
+        }
+        Relationships: []
+      }
+      user_mfa_settings: {
+        Row: {
+          created_at: string
+          email_otp_enabled: boolean
+          preferred_method: string
+          totp_enabled: boolean
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          email_otp_enabled?: boolean
+          preferred_method?: string
+          totp_enabled?: boolean
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          email_otp_enabled?: boolean
+          preferred_method?: string
+          totp_enabled?: boolean
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       vendors: {
         Row: {
           address: string | null
@@ -423,6 +513,9 @@ export type Database = {
           id: string
           notes: string | null
           registration_status: string
+          secondary_contact_person: string | null
+          secondary_email: string | null
+          secondary_phone: string | null
           status: string
           updated_at: string
           whatsapp_number: string
@@ -437,6 +530,9 @@ export type Database = {
           id?: string
           notes?: string | null
           registration_status?: string
+          secondary_contact_person?: string | null
+          secondary_email?: string | null
+          secondary_phone?: string | null
           status?: string
           updated_at?: string
           whatsapp_number: string
@@ -451,6 +547,9 @@ export type Database = {
           id?: string
           notes?: string | null
           registration_status?: string
+          secondary_contact_person?: string | null
+          secondary_email?: string | null
+          secondary_phone?: string | null
           status?: string
           updated_at?: string
           whatsapp_number?: string

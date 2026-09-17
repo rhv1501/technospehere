@@ -53,3 +53,13 @@ export function fileToBase64(file: File): Promise<string> {
     reader.readAsDataURL(file);
   });
 }
+
+export function extractPrNumber(val: string | null | undefined): string {
+  if (!val) return '';
+  return val.trim().replace(/^PR-?/i, '');
+}
+
+export function formatPrReference(val: string | null | undefined): string {
+  const clean = extractPrNumber(val);
+  return clean ? `PR-${clean}` : '';
+}

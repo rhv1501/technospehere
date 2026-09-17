@@ -55,11 +55,11 @@ export function LeadsTable({ leads, categories, onOpenCreateModal }: LeadsTableP
     setDeleteLoading(false);
 
     if (res.success) {
-      toast.success(`Lead "${selectedLeadForDelete.lead_number}" deleted`);
+      toast.success(`RFQ "${selectedLeadForDelete.lead_number}" deleted`);
       setSelectedLeadForDelete(null);
       router.refresh();
     } else {
-      toast.error(res.error || 'Failed to delete lead');
+      toast.error(res.error || 'Failed to delete RFQ');
     }
   };
 
@@ -106,7 +106,7 @@ export function LeadsTable({ leads, categories, onOpenCreateModal }: LeadsTableP
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
           <input
             type="text"
-            placeholder="Search leads..."
+            placeholder="Search RFQs..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className="w-full pl-9 pr-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800/80 rounded-lg text-xs text-slate-900 dark:text-slate-100 placeholder-slate-400 font-medium focus:outline-none focus:border-indigo-500"
@@ -143,7 +143,7 @@ export function LeadsTable({ leads, categories, onOpenCreateModal }: LeadsTableP
             className="w-full sm:w-auto justify-center px-3.5 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium flex items-center space-x-1.5 transition-colors"
           >
             <Plus className="w-4 h-4" />
-            <span>Create Lead</span>
+            <span>Create RFQ</span>
           </button>
         </div>
       </div>
@@ -153,10 +153,9 @@ export function LeadsTable({ leads, categories, onOpenCreateModal }: LeadsTableP
         <table className="w-full text-left text-xs">
           <thead className="bg-slate-50 dark:bg-[#0d1322] border-b border-slate-200/80 dark:border-slate-800/80 text-slate-500 dark:text-slate-400 font-semibold">
             <tr>
-              <th className="px-4 py-3">Lead Reference</th>
+              <th className="px-4 py-3">RFQ Reference</th>
               <th className="px-4 py-3">Product & Qty</th>
               <th className="px-4 py-3">Category</th>
-              <th className="px-4 py-3">Due Date</th>
               <th className="px-4 py-3">Vendors</th>
               <th className="px-4 py-3">Status</th>
               <th className="px-4 py-3 text-right">Actions</th>
@@ -165,8 +164,8 @@ export function LeadsTable({ leads, categories, onOpenCreateModal }: LeadsTableP
           <tbody className="divide-y divide-slate-200/60 dark:divide-slate-800/60 text-slate-700 dark:text-slate-300">
             {filteredLeads.length === 0 ? (
               <tr>
-                <td colSpan={7} className="px-4 py-8 text-center text-slate-500 font-medium">
-                  No leads found.
+                <td colSpan={6} className="px-4 py-8 text-center text-slate-500 font-medium">
+                  No RFQs found.
                 </td>
               </tr>
             ) : (
@@ -184,24 +183,19 @@ export function LeadsTable({ leads, categories, onOpenCreateModal }: LeadsTableP
                     </td>
                     <td className="px-4 py-3">
                       <div className="font-medium text-slate-900 dark:text-slate-200">{cleanProductTitle(lead.product_item)}</div>
-                      <div className="text-slate-500 dark:text-slate-400 text-[11px]">
-                        Qty: {lead.quantity}
+                      <div className="text-slate-500 dark:text-slate-400 text-[11px] flex items-center space-x-2">
+                        <span>Qty: {lead.quantity}</span>
+                        {attachmentCount > 0 && (
+                          <span className="text-indigo-600 dark:text-indigo-400 text-[10px]">
+                            • {attachmentCount} file{attachmentCount > 1 ? 's' : ''}
+                          </span>
+                        )}
                       </div>
                     </td>
                     <td className="px-4 py-3">
                       <span className="px-2 py-0.5 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded text-[11px] font-medium">
                         {lead.categories?.name || 'General'}
                       </span>
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="text-slate-600 dark:text-slate-400">
-                        {formatDate(lead.due_date)}
-                      </div>
-                      {attachmentCount > 0 && (
-                        <span className="text-indigo-600 dark:text-indigo-400 text-[10px]">
-                          {attachmentCount} files
-                        </span>
-                      )}
                     </td>
                     <td className="px-4 py-3">
                       {assignedVendorsCount > 0 ? (
@@ -224,7 +218,7 @@ export function LeadsTable({ leads, categories, onOpenCreateModal }: LeadsTableP
 
                       <button
                         onClick={() => setSelectedLeadForDelete(lead)}
-                        title="Delete Lead"
+                        title="Delete RFQ"
                         className="p-1 rounded text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
                       >
                         <Trash2 className="w-4 h-4" />
@@ -244,11 +238,11 @@ export function LeadsTable({ leads, categories, onOpenCreateModal }: LeadsTableP
           <div className="bg-white dark:bg-[#111827] border border-slate-200/80 dark:border-slate-800/80 rounded-xl p-6 max-w-sm w-full space-y-4 shadow-xl">
             <div className="flex items-center space-x-2 text-rose-600 dark:text-rose-400">
               <AlertTriangle className="w-5 h-5 shrink-0" />
-              <h4 className="font-bold text-slate-900 dark:text-slate-100 text-sm">Delete Lead</h4>
+              <h4 className="font-bold text-slate-900 dark:text-slate-100 text-sm">Delete RFQ</h4>
             </div>
 
             <p className="text-xs text-slate-600 dark:text-slate-300">
-              Are you sure you want to delete lead <strong className="font-mono">{selectedLeadForDelete.lead_number}</strong>?
+              Are you sure you want to delete RFQ <strong className="font-mono">{selectedLeadForDelete.lead_number}</strong>?
             </p>
 
             <div className="flex justify-end space-x-2 pt-2">

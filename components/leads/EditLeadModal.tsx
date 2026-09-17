@@ -18,6 +18,7 @@ import {
 import { updateLead, type LeadInput } from '@/actions/leads';
 import { toast } from 'sonner';
 import { LeadLineItem, parseLineItemsFromLead, formatLineItemsToPayload, cleanSpecifications } from '@/lib/leadUtils';
+import { extractPrNumber, formatPrReference } from '@/lib/utils';
 
 interface Category {
   id: string;
@@ -42,20 +43,12 @@ export function EditLeadModal({
     customer_name: string;
     lead_name: string;
     category_id: string;
-    due_date: string;
-    delivery_terms: string;
-    warranty: string;
-    gst_rate: number;
     remarks: string;
     status: 'draft' | 'ready_to_send' | 'sent' | 'quoted' | 'completed' | 'cancelled';
   }>({
     customer_name: '',
     lead_name: '',
     category_id: '',
-    due_date: '',
-    delivery_terms: '',
-    warranty: '',
-    gst_rate: 18,
     remarks: '',
     status: 'draft',
   });
@@ -66,12 +59,8 @@ export function EditLeadModal({
     if (lead) {
       setFormData({
         customer_name: lead.customer_name || '',
-        lead_name: lead.lead_name || '',
+        lead_name: extractPrNumber(lead.lead_name),
         category_id: lead.category_id || '',
-        due_date: lead.due_date || '',
-        delivery_terms: lead.delivery_terms || '',
-        warranty: lead.warranty || '',
-        gst_rate: lead.gst_rate != null ? Number(lead.gst_rate) : 18,
         remarks: cleanSpecifications(lead.remarks) || cleanSpecifications(lead.specifications),
         status: lead.status || 'draft',
       });
@@ -121,18 +110,10 @@ export function EditLeadModal({
     });
   };
 
-  // Financial calculations
-  const subtotalEstimate = lineItems.reduce(
-    (acc, item) => acc + (item.quantity || 0) * (item.unit_price_estimate || 0),
-    0
-  );
-  const gstAmount = subtotalEstimate * (formData.gst_rate / 100);
-  const grandTotalEstimate = subtotalEstimate + gstAmount;
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.customer_name?.trim() || !formData.lead_name?.trim()) {
-      toast.error('Please fill in Customer Name and Lead Title');
+      toast.error('Please fill in Customer Name and RFQ Title');
       return;
     }
 
@@ -148,16 +129,12 @@ export function EditLeadModal({
 
     const updatePayload: Partial<LeadInput> = {
       customer_name: formData.customer_name,
-      lead_name: formData.lead_name,
+      lead_name: formatPrReference(formData.lead_name),
       product_item: payloadFields.product_item,
       quantity: payloadFields.quantity,
       unit_price_estimate: payloadFields.unit_price_estimate,
       specifications: payloadFields.specifications,
-      due_date: formData.due_date || undefined,
       category_id: formData.category_id || undefined,
-      delivery_terms: formData.delivery_terms || undefined,
-      warranty: formData.warranty || undefined,
-      gst_rate: formData.gst_rate,
       remarks: formData.remarks,
       status: formData.status,
     };
@@ -166,11 +143,11 @@ export function EditLeadModal({
     setLoading(false);
 
     if (res.success) {
-      toast.success(`Lead "${lead.lead_number}" updated successfully!`);
+      toast.success(`RFQ "${lead.lead_number}" updated successfully!`);
       onSuccess();
       onClose();
     } else {
-      toast.error(res.error || 'Failed to update lead');
+      toast.error(res.error || 'Failed to update RFQ');
     }
   };
 
@@ -195,7 +172,7 @@ export function EditLeadModal({
                 <span className="font-mono text-slate-500 dark:text-slate-400">{lead.lead_number}</span>
               </div>
               <h3 className="font-bold text-slate-900 dark:text-slate-100 text-base sm:text-lg tracking-tight">
-                Edit Lead Requirements & Line Items
+                Edit RFQ Requirements & Line Items
               </h3>
             </div>
           </div>
@@ -222,16 +199,14 @@ export function EditLeadModal({
               <div className="flex items-center space-x-2">
                 <Building2 className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
                 <h4 className="text-xs font-bold uppercase tracking-wider text-slate-800 dark:text-slate-200">
-                  1. Client & Lead Title
+                  1. Client & RFQ Title
                 </h4>
               </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3.5">
               <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  Customer Name <span className="text-rose-500 font-bold">*</span>
-                </label>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Customer / Client Name</label>
                 <input
                   type="text"
                   required
@@ -243,15 +218,21 @@ export function EditLeadModal({
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  Lead / PO Title <span className="text-rose-500 font-bold">*</span>
+                  RFQ / PO Reference Number <span className="text-rose-500 font-bold">*</span>
                 </label>
-                <input
-                  type="text"
-                  required
-                  value={formData.lead_name}
-                  onChange={(e) => setFormData({ ...formData, lead_name: e.target.value })}
-                  className="w-full px-3 py-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-semibold text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
-                />
+                <div className="flex rounded-xl overflow-hidden border border-slate-200 dark:border-slate-800 focus-within:border-indigo-500 focus-within:ring-2 focus-within:ring-indigo-500/20 shadow-2xs">
+                  <span className="inline-flex items-center px-3 bg-slate-100 dark:bg-slate-800/80 text-slate-600 dark:text-slate-300 font-mono font-bold text-xs border-r border-slate-200 dark:border-slate-800 select-none shrink-0">
+                    PR-
+                  </span>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. 10023"
+                    value={formData.lead_name}
+                    onChange={(e) => setFormData({ ...formData, lead_name: extractPrNumber(e.target.value) })}
+                    className="w-full px-3 py-2 bg-white dark:bg-slate-950 text-xs font-semibold text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none"
+                  />
+                </div>
               </div>
 
               <div>
@@ -268,6 +249,34 @@ export function EditLeadModal({
                     </option>
                   ))}
                 </select>
+              </div>
+
+
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Workflow Stage</label>
+                <select
+                  value={formData.status}
+                  onChange={(e) => setFormData({ ...formData, status: e.target.value as any })}
+                  className="w-full px-3 py-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-bold text-indigo-600 dark:text-indigo-400 focus:outline-none focus:border-indigo-500 cursor-pointer"
+                >
+                  <option value="draft">Draft</option>
+                  <option value="ready_to_send">Ready to Send</option>
+                  <option value="sent">Sent to Vendors</option>
+                  <option value="quoted">Quotes Received</option>
+                  <option value="completed">Completed</option>
+                  <option value="cancelled">Cancelled</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Remarks & Special Notes</label>
+                <input
+                  type="text"
+                  value={formData.remarks || ''}
+                  onChange={(e) => setFormData({ ...formData, remarks: e.target.value })}
+                  className="w-full px-3 py-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-medium text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+                />
               </div>
             </div>
           </div>
@@ -323,9 +332,9 @@ export function EditLeadModal({
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
-                      <div className="sm:col-span-6">
+                      <div className="sm:col-span-8">
                         <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
-                          Product / Item Description <span className="text-rose-500">*</span>
+                          Product / Item Name <span className="text-rose-500">*</span>
                         </label>
                         <input
                           type="text"
@@ -337,7 +346,7 @@ export function EditLeadModal({
                         />
                       </div>
 
-                      <div className="sm:col-span-2">
+                      <div className="sm:col-span-4">
                         <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
                           Quantity <span className="text-rose-500">*</span>
                         </label>
@@ -353,42 +362,16 @@ export function EditLeadModal({
                         />
                       </div>
 
-                      <div className="sm:col-span-4">
-                        <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
-                          Est. Unit Price (₹ INR)
-                        </label>
-                        <div className="relative">
-                          <input
-                            type="number"
-                            placeholder="e.g. 245000"
-                            value={item.unit_price_estimate || ''}
-                            onChange={(e) =>
-                              handleUpdateLineItem(
-                                idx,
-                                'unit_price_estimate',
-                                parseFloat(e.target.value) || undefined
-                              )
-                            }
-                            className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg text-xs font-semibold text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:border-indigo-500"
-                          />
-                          {lineTotal > 0 && (
-                            <span className="absolute right-2.5 top-1.5 text-[10px] font-mono font-bold text-emerald-600 dark:text-emerald-400">
-                              Sub: ₹{lineTotal.toLocaleString('en-IN')}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-
                       <div className="sm:col-span-12">
                         <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
-                          Item Technical Specifications / Model Details
+                          Description & Technical Specifications
                         </label>
-                        <input
-                          type="text"
-                          placeholder="e.g. Intel i9-13900HX, 64GB RAM, 2TB SSD, RTX 4000 Ada 12GB..."
+                        <textarea
+                          rows={3}
+                          placeholder={`e.g.\ni5 11th Gen Processor\n16GB DDR4 RAM\n512GB NVMe SSD...`}
                           value={item.specifications || ''}
                           onChange={(e) => handleUpdateLineItem(idx, 'specifications', e.target.value)}
-                          className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg text-xs font-medium text-slate-800 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:border-indigo-500"
+                          className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg text-xs font-medium text-slate-800 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:border-indigo-500 leading-relaxed resize-y"
                         />
                       </div>
                     </div>
@@ -397,119 +380,30 @@ export function EditLeadModal({
               })}
             </div>
 
-            {/* Financial Calculations Summary Bar */}
+            {/* Line Items Summary Bar */}
             <div className="p-3.5 bg-gradient-to-br from-slate-900 to-[#0b1324] text-white rounded-xl flex flex-wrap items-center justify-between gap-3 border border-slate-800 shadow-sm">
               <div className="flex items-center space-x-2">
-                <Calculator className="w-4 h-4 text-emerald-400" />
+                <ListOrdered className="w-4 h-4 text-indigo-400" />
                 <span className="text-xs font-bold text-slate-200">
-                  Estimated Financial Summary ({lineItems.reduce((acc, i) => acc + (i.quantity || 0), 0)} Total Units)
+                  Procurement Line Items Summary
                 </span>
               </div>
 
               <div className="flex items-center space-x-4 text-xs font-medium">
                 <div>
-                  <span className="text-slate-400 text-[11px]">Subtotal: </span>
-                  <span className="font-mono font-bold text-slate-100">
-                    ₹{subtotalEstimate.toLocaleString('en-IN')}
-                  </span>
+                  <span className="text-slate-400 text-[11px]">Total Items: </span>
+                  <span className="font-mono font-bold text-slate-100">{lineItems.length}</span>
                 </div>
-                <div>
-                  <span className="text-slate-400 text-[11px]">GST ({formData.gst_rate}%): </span>
-                  <span className="font-mono font-bold text-slate-300">
-                    ₹{gstAmount.toLocaleString('en-IN')}
-                  </span>
-                </div>
-                <div className="pl-2 border-l border-slate-700">
-                  <span className="text-slate-300 text-[11px]">Grand Total: </span>
-                  <span className="font-mono font-extrabold text-emerald-400 text-sm">
-                    ₹{grandTotalEstimate.toLocaleString('en-IN')}
+                <div className="pl-3 border-l border-slate-700">
+                  <span className="text-slate-400 text-[11px]">Total Quantity: </span>
+                  <span className="font-mono font-extrabold text-indigo-400 text-sm">
+                    {lineItems.reduce((acc, i) => acc + (Number(i.quantity) || 0), 0)} Units
                   </span>
                 </div>
               </div>
             </div>
           </div>
 
-          {/* Commercial Terms & Workflow */}
-          <div className="bg-slate-50/60 dark:bg-slate-900/50 border border-slate-200/80 dark:border-slate-800/80 rounded-xl p-4 sm:p-4.5 space-y-3.5">
-            <div className="flex items-center justify-between pb-2 border-b border-slate-200 dark:border-slate-800/80">
-              <div className="flex items-center space-x-2">
-                <Shield className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-                <h4 className="text-xs font-bold uppercase tracking-wider text-slate-800 dark:text-slate-200">
-                  3. Commercial Terms & Workflow Stage
-                </h4>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3.5">
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">GST Rate (%)</label>
-                <input
-                  type="number"
-                  value={formData.gst_rate}
-                  onChange={(e) => setFormData({ ...formData, gst_rate: parseFloat(e.target.value) || 18 })}
-                  className="w-full px-3 py-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-semibold text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Required Due Date</label>
-                <input
-                  type="date"
-                  value={formData.due_date || ''}
-                  onChange={(e) => setFormData({ ...formData, due_date: e.target.value })}
-                  className="w-full px-3 py-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-semibold text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 cursor-pointer"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Delivery Terms</label>
-                <input
-                  type="text"
-                  value={formData.delivery_terms || ''}
-                  onChange={(e) => setFormData({ ...formData, delivery_terms: e.target.value })}
-                  className="w-full px-3 py-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-semibold text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Workflow Stage</label>
-                <select
-                  value={formData.status}
-                  onChange={(e) => setFormData({ ...formData, status: e.target.value as any })}
-                  className="w-full px-3 py-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-bold text-indigo-600 dark:text-indigo-400 focus:outline-none focus:border-indigo-500 cursor-pointer"
-                >
-                  <option value="draft">Draft</option>
-                  <option value="ready_to_send">Ready to Send</option>
-                  <option value="sent">Sent to Vendors</option>
-                  <option value="quoted">Quotes Received</option>
-                  <option value="completed">Completed</option>
-                  <option value="cancelled">Cancelled</option>
-                </select>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Warranty Required</label>
-                <input
-                  type="text"
-                  value={formData.warranty || ''}
-                  onChange={(e) => setFormData({ ...formData, warranty: e.target.value })}
-                  className="w-full px-3 py-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-semibold text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Remarks & Internal Notes</label>
-                <input
-                  type="text"
-                  value={formData.remarks || ''}
-                  onChange={(e) => setFormData({ ...formData, remarks: e.target.value })}
-                  className="w-full px-3 py-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-medium text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
-                />
-              </div>
-            </div>
-          </div>
         </div>
 
         {/* Enterprise Pinned Footer */}
@@ -528,7 +422,7 @@ export function EditLeadModal({
             className="px-5 py-2 rounded-xl text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-500 active:scale-[0.98] shadow-md shadow-indigo-600/30 flex items-center space-x-2 disabled:opacity-50 transition-all"
           >
             {loading && <Loader2 className="w-4 h-4 animate-spin" />}
-            <span>Save Lead & Line Items</span>
+            <span>Save RFQ & Line Items</span>
           </button>
         </div>
       </form>

@@ -22,7 +22,7 @@ import {
 import { createLead, uploadLeadAttachment, type LeadInput } from '@/actions/leads';
 import { toast } from 'sonner';
 import { LeadLineItem, formatLineItemsToPayload } from '@/lib/leadUtils';
-import { fileToBase64 } from '@/lib/utils';
+import { fileToBase64, extractPrNumber, formatPrReference } from '@/lib/utils';
 
 interface Category {
   id: string;
@@ -45,19 +45,11 @@ export function CreateLeadModal({
     customer_name: string;
     lead_name: string;
     category_id: string;
-    due_date: string;
-    delivery_terms: string;
-    warranty: string;
-    gst_rate: number;
     remarks: string;
   }>({
     customer_name: '',
     lead_name: '',
     category_id: categories[0]?.id || '',
-    due_date: '',
-    delivery_terms: 'Doorstep Delivery (5-7 Business Days)',
-    warranty: '1 Year Standard Manufacturer Warranty',
-    gst_rate: 18,
     remarks: '',
   });
 
@@ -73,7 +65,7 @@ export function CreateLeadModal({
 
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
 
-  // Keyboard shortcut listener (ESC to close)
+  // ESC key listener & resetting state when modal opens
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && isOpen) {
@@ -84,21 +76,28 @@ export function CreateLeadModal({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, onClose]);
 
+  useEffect(() => {
+    if (isOpen) {
+      setFormData({
+        customer_name: '',
+        lead_name: '',
+        category_id: categories[0]?.id || '',
+        remarks: '',
+      });
+      setLineItems([
+        {
+          id: 'item_1',
+          product_item: '',
+          quantity: 1,
+          unit_price_estimate: undefined,
+          specifications: '',
+        },
+      ]);
+      setSelectedFiles([]);
+    }
+  }, [isOpen, categories]);
+
   if (!isOpen) return null;
-
-  const deliveryPresets = [
-    'Doorstep Delivery (5-7 Business Days)',
-    'Express Delivery (48 Hours)',
-    'Ex-Works / Factory Pickup',
-    'FOB Shipping',
-  ];
-
-  const warrantyPresets = [
-    '1 Year Manufacturer Warranty',
-    '2 Years Onsite Warranty',
-    '3 Years Premier Support',
-    '90 Days Limited Warranty',
-  ];
 
   const handleAddLineItem = () => {
     const newItem: LeadLineItem = {
@@ -139,18 +138,10 @@ export function CreateLeadModal({
     setSelectedFiles((prev) => prev.filter((_, i) => i !== index));
   };
 
-  // Financial calculations
-  const subtotalEstimate = lineItems.reduce(
-    (acc, item) => acc + (item.quantity || 0) * (item.unit_price_estimate || 0),
-    0
-  );
-  const gstAmount = subtotalEstimate * (formData.gst_rate / 100);
-  const grandTotalEstimate = subtotalEstimate + gstAmount;
-
   const handleSubmit = async (e: React.FormEvent, initialStatus: 'draft' | 'ready_to_send') => {
     e.preventDefault();
     if (!formData.customer_name?.trim() || !formData.lead_name?.trim()) {
-      toast.error('Please enter Customer Name and Lead/PO Title');
+      toast.error('Please enter Customer Name and PO / RFQ Title');
       return;
     }
 
@@ -166,16 +157,12 @@ export function CreateLeadModal({
 
     const leadPayload: LeadInput = {
       customer_name: formData.customer_name,
-      lead_name: formData.lead_name,
+      lead_name: formatPrReference(formData.lead_name),
       product_item: payloadFields.product_item,
       quantity: payloadFields.quantity,
       unit_price_estimate: payloadFields.unit_price_estimate,
       specifications: payloadFields.specifications,
-      due_date: formData.due_date || undefined,
       category_id: formData.category_id || undefined,
-      delivery_terms: formData.delivery_terms || undefined,
-      warranty: formData.warranty || undefined,
-      gst_rate: formData.gst_rate,
       remarks: formData.remarks,
       status: initialStatus,
     };
@@ -184,7 +171,7 @@ export function CreateLeadModal({
 
     if (!res.success || !res.lead) {
       setLoading(false);
-      toast.error(res.error || 'Failed to create lead');
+      toast.error(res.error || 'Failed to create RFQ');
       return;
     }
 
@@ -221,7 +208,7 @@ export function CreateLeadModal({
     }
 
     setLoading(false);
-    toast.success(`Lead "${res.lead.lead_number}" with ${lineItems.length} line item(s) created!`);
+    toast.success(`RFQ "${res.lead.lead_number}" with ${lineItems.length} line item(s) created!`);
     setSelectedFiles([]);
     onSuccess(leadId);
     onClose();
@@ -249,7 +236,7 @@ export function CreateLeadModal({
                 <span className="text-slate-500 dark:text-slate-400">Multi-Line Item Procurement</span>
               </div>
               <h3 className="font-bold text-slate-900 dark:text-slate-100 text-base sm:text-lg tracking-tight">
-                Create New Requirement & Lead
+                Create New RFQ Requirement
               </h3>
             </div>
           </div>
@@ -280,11 +267,11 @@ export function CreateLeadModal({
                 </h4>
               </div>
               <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800/50">
-                Primary Lead Metadata
+                Primary RFQ Metadata
               </span>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3.5">
               <div>
                 <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
                   Customer / Client Name <span className="text-rose-500 font-bold">*</span>
@@ -301,16 +288,21 @@ export function CreateLeadModal({
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  Lead / PO Reference Title <span className="text-rose-500 font-bold">*</span>
+                  PO / RFQ Reference Number <span className="text-rose-500 font-bold">*</span>
                 </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. Q3 IT Infrastructure Procurement"
-                  value={formData.lead_name}
-                  onChange={(e) => setFormData({ ...formData, lead_name: e.target.value })}
-                  className="w-full px-3 py-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-semibold text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
-                />
+                <div className="flex rounded-xl overflow-hidden border border-slate-200 dark:border-slate-800 focus-within:border-indigo-500 focus-within:ring-2 focus-within:ring-indigo-500/20 shadow-2xs">
+                  <span className="inline-flex items-center px-3 bg-slate-100 dark:bg-slate-800/80 text-slate-600 dark:text-slate-300 font-mono font-bold text-xs border-r border-slate-200 dark:border-slate-800 select-none shrink-0">
+                    PR-
+                  </span>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. 10023"
+                    value={formData.lead_name}
+                    onChange={(e) => setFormData({ ...formData, lead_name: extractPrNumber(e.target.value) })}
+                    className="w-full px-3 py-2 bg-white dark:bg-slate-950 text-xs font-semibold text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none"
+                  />
+                </div>
               </div>
 
               <div>
@@ -384,9 +376,9 @@ export function CreateLeadModal({
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
-                      <div className="sm:col-span-6">
+                      <div className="sm:col-span-8">
                         <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
-                          Product / Item Description <span className="text-rose-500">*</span>
+                          Product / Item Name <span className="text-rose-500">*</span>
                         </label>
                         <input
                           type="text"
@@ -398,7 +390,7 @@ export function CreateLeadModal({
                         />
                       </div>
 
-                      <div className="sm:col-span-2">
+                      <div className="sm:col-span-4">
                         <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
                           Quantity <span className="text-rose-500">*</span>
                         </label>
@@ -414,42 +406,16 @@ export function CreateLeadModal({
                         />
                       </div>
 
-                      <div className="sm:col-span-4">
-                        <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
-                          Est. Unit Price (₹ INR)
-                        </label>
-                        <div className="relative">
-                          <input
-                            type="number"
-                            placeholder="e.g. 245000"
-                            value={item.unit_price_estimate || ''}
-                            onChange={(e) =>
-                              handleUpdateLineItem(
-                                idx,
-                                'unit_price_estimate',
-                                parseFloat(e.target.value) || undefined
-                              )
-                            }
-                            className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg text-xs font-semibold text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:border-indigo-500"
-                          />
-                          {lineTotal > 0 && (
-                            <span className="absolute right-2.5 top-1.5 text-[10px] font-mono font-bold text-emerald-600 dark:text-emerald-400">
-                              Sub: ₹{lineTotal.toLocaleString('en-IN')}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-
                       <div className="sm:col-span-12">
                         <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
-                          Item Technical Specifications / Model Details
+                          Description & Technical Specifications
                         </label>
-                        <input
-                          type="text"
-                          placeholder="e.g. Intel i9-13900HX, 64GB RAM, 2TB SSD, RTX 4000 Ada 12GB..."
+                        <textarea
+                          rows={3}
+                          placeholder={`e.g.\ni5 11th Gen Processor\n16GB DDR4 RAM\n512GB NVMe SSD...`}
                           value={item.specifications || ''}
                           onChange={(e) => handleUpdateLineItem(idx, 'specifications', e.target.value)}
-                          className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg text-xs font-medium text-slate-800 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:border-indigo-500"
+                          className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg text-xs font-medium text-slate-800 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:border-indigo-500 leading-relaxed resize-y"
                         />
                       </div>
                     </div>
@@ -458,106 +424,31 @@ export function CreateLeadModal({
               })}
             </div>
 
-            {/* Financial Calculations Summary Bar */}
+            {/* Line Items Procurement Summary Bar */}
             <div className="p-3.5 bg-gradient-to-br from-slate-900 to-[#0b1324] text-white rounded-xl flex flex-wrap items-center justify-between gap-3 border border-slate-800 shadow-sm">
               <div className="flex items-center space-x-2">
-                <Calculator className="w-4 h-4 text-emerald-400" />
+                <ListOrdered className="w-4 h-4 text-indigo-400" />
                 <span className="text-xs font-bold text-slate-200">
-                  Estimated Financial Summary ({lineItems.reduce((acc, i) => acc + (i.quantity || 0), 0)} Total Units)
+                  Procurement Line Items Summary
                 </span>
               </div>
 
               <div className="flex items-center space-x-4 text-xs font-medium">
                 <div>
-                  <span className="text-slate-400 text-[11px]">Subtotal: </span>
-                  <span className="font-mono font-bold text-slate-100">
-                    ₹{subtotalEstimate.toLocaleString('en-IN')}
-                  </span>
+                  <span className="text-slate-400 text-[11px]">Total Items: </span>
+                  <span className="font-mono font-bold text-slate-100">{lineItems.length}</span>
                 </div>
-                <div>
-                  <span className="text-slate-400 text-[11px]">GST ({formData.gst_rate}%): </span>
-                  <span className="font-mono font-bold text-slate-300">
-                    ₹{gstAmount.toLocaleString('en-IN')}
-                  </span>
-                </div>
-                <div className="pl-2 border-l border-slate-700">
-                  <span className="text-slate-300 text-[11px]">Grand Total: </span>
-                  <span className="font-mono font-extrabold text-emerald-400 text-sm">
-                    ₹{grandTotalEstimate.toLocaleString('en-IN')}
+                <div className="pl-3 border-l border-slate-700">
+                  <span className="text-slate-400 text-[11px]">Total Quantity: </span>
+                  <span className="font-mono font-extrabold text-indigo-400 text-sm">
+                    {lineItems.reduce((acc, i) => acc + (Number(i.quantity) || 0), 0)} Units
                   </span>
                 </div>
               </div>
             </div>
           </div>
 
-          {/* Section 3: Terms & Logistics */}
-          <div className="bg-slate-50/60 dark:bg-slate-900/50 border border-slate-200/80 dark:border-slate-800/80 rounded-xl p-4 sm:p-4.5 space-y-3.5">
-            <div className="flex items-center justify-between pb-2 border-b border-slate-200 dark:border-slate-800/80">
-              <div className="flex items-center space-x-2">
-                <Shield className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-                <h4 className="text-xs font-bold uppercase tracking-wider text-slate-800 dark:text-slate-200">
-                  3. Commercial Terms, Tax & Schedule
-                </h4>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3.5">
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  Target GST Rate (%)
-                </label>
-                <select
-                  value={formData.gst_rate}
-                  onChange={(e) => setFormData({ ...formData, gst_rate: parseFloat(e.target.value) || 18 })}
-                  className="w-full px-3 py-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-bold text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500 cursor-pointer"
-                >
-                  <option value={0}>0% (Exempt)</option>
-                  <option value={5}>5% GST</option>
-                  <option value={12}>12% GST</option>
-                  <option value={18}>18% GST (Standard)</option>
-                  <option value={28}>28% GST</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  Required Due Date
-                </label>
-                <input
-                  type="date"
-                  value={formData.due_date || ''}
-                  onChange={(e) => setFormData({ ...formData, due_date: e.target.value })}
-                  className="w-full px-3 py-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-semibold text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500 cursor-pointer"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  Delivery & Shipping Terms
-                </label>
-                <input
-                  type="text"
-                  placeholder="e.g. Doorstep Delivery (5-7 Business Days)"
-                  value={formData.delivery_terms || ''}
-                  onChange={(e) => setFormData({ ...formData, delivery_terms: e.target.value })}
-                  className="w-full px-3 py-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-semibold text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  Warranty Requirements
-                </label>
-                <input
-                  type="text"
-                  placeholder="e.g. 1 Year Standard Manufacturer Warranty"
-                  value={formData.warranty || ''}
-                  onChange={(e) => setFormData({ ...formData, warranty: e.target.value })}
-                  className="w-full px-3 py-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-semibold text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500"
-                />
-              </div>
-            </div>
-          </div>
+          {/* Section 3: Attachments & Remarks */}
 
           {/* Section 4: Attachments & Remarks */}
           <div className="bg-slate-50/60 dark:bg-slate-900/50 border border-slate-200/80 dark:border-slate-800/80 rounded-xl p-4 sm:p-4.5 space-y-3.5">
@@ -638,7 +529,7 @@ export function CreateLeadModal({
         <div className="px-5 py-3.5 sm:px-6 border-t border-slate-200 dark:border-slate-800/80 bg-slate-50/90 dark:bg-[#0d1527] flex flex-col sm:flex-row items-center justify-between gap-3 shrink-0">
           <div className="flex items-center space-x-2 text-xs text-slate-500 dark:text-slate-400 font-medium">
             <Sparkles className="w-4 h-4 text-indigo-500" />
-            <span>Lead ID auto-generated upon submission</span>
+            <span>RFQ Reference auto-generated upon submission</span>
           </div>
 
           <div className="flex items-center space-x-2.5 w-full sm:w-auto justify-end">
@@ -667,7 +558,7 @@ export function CreateLeadModal({
               className="px-4.5 py-2 rounded-xl text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-500 active:scale-[0.98] shadow-md shadow-indigo-600/30 flex items-center space-x-1.5 disabled:opacity-50 transition-all"
             >
               {loading && <Loader2 className="w-4 h-4 animate-spin" />}
-              <span>Create Lead & Select Vendors →</span>
+              <span>Create RFQ & Select Vendors →</span>
             </button>
           </div>
         </div>

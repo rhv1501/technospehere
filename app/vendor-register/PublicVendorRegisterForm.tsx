@@ -13,6 +13,9 @@ export function PublicVendorRegisterForm({ categories }: { categories: any[] }) 
     contact_person: '',
     email: '',
     whatsapp_number: '',
+    secondary_contact_person: '',
+    secondary_email: '',
+    secondary_phone: '',
     address: '',
     gst_number: '',
     notes: '',
@@ -32,7 +35,7 @@ export function PublicVendorRegisterForm({ categories }: { categories: any[] }) 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.company_name || !formData.contact_person || !formData.email || !formData.whatsapp_number) {
-      toast.error('Please fill in all mandatory fields');
+      toast.error('Please fill in all mandatory fields (Company Name & Primary Contact details)');
       return;
     }
 
@@ -68,6 +71,9 @@ export function PublicVendorRegisterForm({ categories }: { categories: any[] }) 
                 contact_person: '',
                 email: '',
                 whatsapp_number: '',
+                secondary_contact_person: '',
+                secondary_email: '',
+                secondary_phone: '',
                 address: '',
                 gst_number: '',
                 notes: '',
@@ -102,64 +108,129 @@ export function PublicVendorRegisterForm({ categories }: { categories: any[] }) 
       </div>
 
       {/* Form */}
-      <form onSubmit={handleSubmit} className="p-6 space-y-4">
+      <form onSubmit={handleSubmit} className="p-6 space-y-5">
+        <div>
+          <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+            Company Name <span className="text-rose-500 font-bold">*</span>
+          </label>
+          <input
+            type="text"
+            required
+            placeholder="e.g. Apex Infotech Pvt Ltd"
+            value={formData.company_name}
+            onChange={(e) => setFormData({ ...formData, company_name: e.target.value })}
+            className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800/80 rounded-lg text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500 font-medium"
+          />
+        </div>
+
+        {/* Primary Contact Person (Mandatory) */}
+        <div className="bg-slate-50/80 dark:bg-slate-900/60 border border-slate-200/80 dark:border-slate-800/80 rounded-xl p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400 uppercase tracking-wider">
+              Primary Contact Person <span className="text-rose-500">*</span>
+            </span>
+            <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300">
+              Compulsory
+            </span>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div>
+              <label className="block text-[11px] font-medium text-slate-700 dark:text-slate-300 mb-1">
+                Full Name <span className="text-rose-500">*</span>
+              </label>
+              <input
+                type="text"
+                required
+                placeholder="e.g. Rajesh Kumar"
+                value={formData.contact_person}
+                onChange={(e) => setFormData({ ...formData, contact_person: e.target.value })}
+                className="w-full px-3 py-2 bg-white dark:bg-slate-950 border border-slate-200/80 dark:border-slate-800/80 rounded-lg text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-medium text-slate-700 dark:text-slate-300 mb-1">
+                Official Email <span className="text-rose-500">*</span>
+              </label>
+              <input
+                type="email"
+                required
+                placeholder="sales@company.com"
+                value={formData.email}
+                onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                className="w-full px-3 py-2 bg-white dark:bg-slate-950 border border-slate-200/80 dark:border-slate-800/80 rounded-lg text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-medium text-slate-700 dark:text-slate-300 mb-1">
+                WhatsApp Number <span className="text-rose-500">*</span>
+              </label>
+              <input
+                type="text"
+                required
+                placeholder="+91 98765 43210"
+                value={formData.whatsapp_number}
+                onChange={(e) => setFormData({ ...formData, whatsapp_number: e.target.value })}
+                className="w-full px-3 py-2 bg-white dark:bg-slate-950 border border-slate-200/80 dark:border-slate-800/80 rounded-lg text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500"
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Secondary Contact Person (Optional) */}
+        <div className="bg-slate-50/40 dark:bg-slate-900/40 border border-slate-200/60 dark:border-slate-800/60 rounded-xl p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider">
+              Secondary Contact Person
+            </span>
+            <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-slate-200/70 dark:bg-slate-800 text-slate-600 dark:text-slate-400">
+              Optional
+            </span>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div>
+              <label className="block text-[11px] font-medium text-slate-600 dark:text-slate-400 mb-1">
+                Full Name (Optional)
+              </label>
+              <input
+                type="text"
+                placeholder="e.g. Sunita Patel"
+                value={formData.secondary_contact_person}
+                onChange={(e) => setFormData({ ...formData, secondary_contact_person: e.target.value })}
+                className="w-full px-3 py-2 bg-white dark:bg-slate-950 border border-slate-200/80 dark:border-slate-800/80 rounded-lg text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-medium text-slate-600 dark:text-slate-400 mb-1">
+                Official Email (Optional)
+              </label>
+              <input
+                type="email"
+                placeholder="sunita@company.com"
+                value={formData.secondary_email}
+                onChange={(e) => setFormData({ ...formData, secondary_email: e.target.value })}
+                className="w-full px-3 py-2 bg-white dark:bg-slate-950 border border-slate-200/80 dark:border-slate-800/80 rounded-lg text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-medium text-slate-600 dark:text-slate-400 mb-1">
+                Phone Number (Optional)
+              </label>
+              <input
+                type="text"
+                placeholder="+91 91234 56789"
+                value={formData.secondary_phone}
+                onChange={(e) => setFormData({ ...formData, secondary_phone: e.target.value })}
+                className="w-full px-3 py-2 bg-white dark:bg-slate-950 border border-slate-200/80 dark:border-slate-800/80 rounded-lg text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500"
+              />
+            </div>
+          </div>
+        </div>
+
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-              Company Name <span className="text-rose-500">*</span>
-            </label>
-            <input
-              type="text"
-              required
-              placeholder="e.g. Apex Infotech Pvt Ltd"
-              value={formData.company_name}
-              onChange={(e) => setFormData({ ...formData, company_name: e.target.value })}
-              className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800/80 rounded-lg text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500"
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-              Contact Person <span className="text-rose-500">*</span>
-            </label>
-            <input
-              type="text"
-              required
-              placeholder="e.g. Rajesh Kumar"
-              value={formData.contact_person}
-              onChange={(e) => setFormData({ ...formData, contact_person: e.target.value })}
-              className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800/80 rounded-lg text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500"
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-              Official Email <span className="text-rose-500">*</span>
-            </label>
-            <input
-              type="email"
-              required
-              placeholder="sales@company.com"
-              value={formData.email}
-              onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-              className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800/80 rounded-lg text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500"
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-              WhatsApp Number <span className="text-rose-500">*</span>
-            </label>
-            <input
-              type="text"
-              required
-              placeholder="+91 98765 43210"
-              value={formData.whatsapp_number}
-              onChange={(e) => setFormData({ ...formData, whatsapp_number: e.target.value })}
-              className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800/80 rounded-lg text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500"
-            />
-          </div>
-
           <div>
             <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
               GST Number (Optional)

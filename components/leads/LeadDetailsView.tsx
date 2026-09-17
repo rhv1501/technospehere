@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
@@ -28,6 +28,8 @@ import {
   Download,
   Eye,
   FileCheck,
+  ListOrdered,
+  Plus,
 } from 'lucide-react';
 import {
   assignVendorsToLead,
@@ -38,8 +40,16 @@ import {
   updateLead,
   deleteLead,
 } from '@/actions/leads';
-import { formatDate, formatCurrency, formatFileSize, fileToBase64 } from '@/lib/utils';
-import { parseLineItemsFromLead, cleanSpecifications, formatReadableSpecifications, cleanProductTitle, formatLineItemsSummaryText } from '@/lib/leadUtils';
+import { formatDate, formatCurrency, formatFileSize, fileToBase64, extractPrNumber, formatPrReference } from '@/lib/utils';
+import {
+  parseLineItemsFromLead,
+  cleanSpecifications,
+  formatReadableSpecifications,
+  cleanProductTitle,
+  formatLineItemsSummaryText,
+  formatLineItemsToPayload,
+  LeadLineItem,
+} from '@/lib/leadUtils';
 import { toast } from 'sonner';
 
 interface LeadDetailsViewProps {
@@ -61,19 +71,13 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
   // Form state for Lead Editing
   const [editFormData, setEditFormData] = useState({
     customer_name: lead.customer_name || '',
-    lead_name: lead.lead_name || '',
-    product_item: lead.product_item || '',
-    quantity: lead.quantity || 1,
+    lead_name: extractPrNumber(lead.lead_name),
     category_id: lead.category_id || '',
     status: lead.status || 'draft',
-    due_date: lead.due_date ? new Date(lead.due_date).toISOString().split('T')[0] : '',
-    unit_price_estimate: lead.unit_price_estimate !== null && lead.unit_price_estimate !== undefined ? lead.unit_price_estimate : '',
-    gst_rate: lead.gst_rate || 18,
-    delivery_terms: lead.delivery_terms || '',
-    warranty: lead.warranty || '',
-    specifications: cleanSpecifications(lead.specifications),
-    remarks: lead.remarks || '',
+    remarks: cleanSpecifications(lead.remarks) || cleanSpecifications(lead.specifications),
   });
+
+  const [lineItems, setLineItems] = useState<LeadLineItem[]>(() => parseLineItemsFromLead(lead));
 
   // Step 3 Vendors state
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState<string>(
@@ -82,6 +86,18 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
   const [vendorSearch, setVendorSearch] = useState<string>('');
   const initialSelectedVendorIds = (lead.lead_vendors || []).map((lv: any) => lv.vendor_id);
   const [selectedVendorIds, setSelectedVendorIds] = useState<string[]>(initialSelectedVendorIds);
+
+  // Auto-check vendors for lead's category if none previously selected
+  useEffect(() => {
+    if (initialSelectedVendorIds.length === 0 && lead?.category_id && allVendors.length > 0) {
+      const catActiveIds = allVendors
+        .filter((v) => v.status === 'active' && v.categories?.some((c: any) => c.id === lead.category_id))
+        .map((v) => v.id);
+      if (catActiveIds.length > 0) {
+        setSelectedVendorIds(catActiveIds);
+      }
+    }
+  }, [lead?.category_id, allVendors]);
 
   const [loading, setLoading] = useState(false);
   const [emailLoading, setEmailLoading] = useState(false);
@@ -106,6 +122,32 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
 
     return matchesCat && matchesSearch;
   });
+
+  const handleCategoryFilterChange = (catId: string) => {
+    setSelectedCategoryFilter(catId);
+    if (catId !== 'all') {
+      const catActiveIds = allVendors
+        .filter((v) => v.status === 'active' && v.categories?.some((c: any) => c.id === catId))
+        .map((v) => v.id);
+      if (catActiveIds.length > 0) {
+        setSelectedVendorIds((prev) => Array.from(new Set([...prev, ...catActiveIds])));
+        toast.info(`Auto-selected ${catActiveIds.length} active vendor(s) in category`);
+      }
+    }
+  };
+
+  const handleSelectAllCategoryVendors = () => {
+    const targetCatId = selectedCategoryFilter;
+    const catActiveVendors = allVendors.filter((v) => {
+      const isCatMatch =
+        targetCatId === 'all' || (v.categories && v.categories.some((c: any) => c.id === targetCatId));
+      return isCatMatch && v.status === 'active';
+    });
+
+    const activeVendorIds = catActiveVendors.map((v) => v.id);
+    setSelectedVendorIds((prev) => Array.from(new Set([...prev, ...activeVendorIds])));
+    toast.success(`Selected ${activeVendorIds.length} active vendor(s)`);
+  };
 
   const handleVendorToggle = (vendor: any) => {
     if (vendor.status !== 'active') {
@@ -206,53 +248,82 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
     }
   };
 
+  const handleAddLineItem = () => {
+    const newItem: LeadLineItem = {
+      id: `item_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+      product_item: '',
+      quantity: 1,
+      specifications: '',
+    };
+    setLineItems((prev) => [...prev, newItem]);
+  };
+
+  const handleRemoveLineItem = (index: number) => {
+    if (lineItems.length <= 1) {
+      toast.error('At least one line item is required.');
+      return;
+    }
+    setLineItems((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const handleUpdateLineItem = (index: number, field: keyof LeadLineItem, value: any) => {
+    setLineItems((prev) => {
+      const updated = [...prev];
+      updated[index] = { ...updated[index], [field]: value };
+      return updated;
+    });
+  };
+
   const handleSaveLeadEdit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (!editFormData.customer_name?.trim() || !editFormData.lead_name?.trim()) {
+      toast.error('Please enter Customer Name and Lead/PO Reference Number');
+      return;
+    }
+
+    const invalidItems = lineItems.filter((it) => !it.product_item?.trim() || !it.quantity || it.quantity < 1);
+    if (invalidItems.length > 0) {
+      toast.error('Please ensure all line items have a valid product name and quantity.');
+      return;
+    }
+
     setSaveLoading(true);
 
+    const payloadFields = formatLineItemsToPayload(lineItems, editFormData.remarks);
+
     const res = await updateLead(lead.id, {
-      customer_name: editFormData.customer_name,
-      lead_name: editFormData.lead_name,
-      product_item: editFormData.product_item,
-      quantity: Number(editFormData.quantity),
+      customer_name: editFormData.customer_name.trim(),
+      lead_name: formatPrReference(editFormData.lead_name),
+      product_item: payloadFields.product_item,
+      quantity: payloadFields.quantity,
+      unit_price_estimate: payloadFields.unit_price_estimate,
+      specifications: payloadFields.specifications,
       category_id: editFormData.category_id || undefined,
       status: editFormData.status as any,
-      due_date: editFormData.due_date || undefined,
-      unit_price_estimate: editFormData.unit_price_estimate ? Number(editFormData.unit_price_estimate) : undefined,
-      gst_rate: editFormData.gst_rate ? Number(editFormData.gst_rate) : 18,
-      delivery_terms: editFormData.delivery_terms,
-      warranty: editFormData.warranty,
-      specifications: editFormData.specifications,
       remarks: editFormData.remarks,
     });
 
     setSaveLoading(false);
 
     if (res.success) {
-      toast.success('Lead updated successfully!');
+      toast.success('RFQ updated successfully!');
       setIsEditing(false);
       router.refresh();
     } else {
-      toast.error(res.error || 'Failed to update lead');
+      toast.error(res.error || 'Failed to update RFQ');
     }
   };
 
   const handleCancelEdit = () => {
     setEditFormData({
       customer_name: lead.customer_name || '',
-      lead_name: lead.lead_name || '',
-      product_item: lead.product_item || '',
-      quantity: lead.quantity || 1,
+      lead_name: extractPrNumber(lead.lead_name),
       category_id: lead.category_id || '',
       status: lead.status || 'draft',
-      due_date: lead.due_date ? new Date(lead.due_date).toISOString().split('T')[0] : '',
-      unit_price_estimate: lead.unit_price_estimate !== null && lead.unit_price_estimate !== undefined ? lead.unit_price_estimate : '',
-      gst_rate: lead.gst_rate || 18,
-      delivery_terms: lead.delivery_terms || '',
-      warranty: lead.warranty || '',
-      specifications: cleanSpecifications(lead.specifications),
-      remarks: lead.remarks || '',
+      remarks: cleanSpecifications(lead.remarks) || cleanSpecifications(lead.specifications),
     });
+    setLineItems(parseLineItemsFromLead(lead));
     setIsEditing(false);
   };
 
@@ -262,10 +333,10 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
     setDeleteLoading(false);
 
     if (res.success) {
-      toast.success(`Lead ${lead.lead_number} deleted successfully`);
+      toast.success(`RFQ ${lead.lead_number} deleted successfully`);
       router.push('/dashboard/leads');
     } else {
-      toast.error(res.error || 'Failed to delete lead');
+      toast.error(res.error || 'Failed to delete RFQ');
     }
   };
 
@@ -279,7 +350,7 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
               <Link
                 href="/dashboard/leads"
                 className="p-1.5 rounded-lg bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 shadow-xs transition-colors"
-                title="Back to Leads"
+                title="Back to RFQs"
               >
                 <ArrowLeft className="w-4 h-4" />
               </Link>
@@ -377,7 +448,7 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
                   className="px-3.5 py-2 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 dark:hover:bg-indigo-900/80 border border-indigo-200 dark:border-indigo-500/30 text-indigo-700 dark:text-indigo-300 font-extrabold text-xs flex items-center space-x-1.5 transition-colors shadow-xs"
                 >
                   <Pencil className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
-                  <span>Edit Lead</span>
+                  <span>Edit RFQ</span>
                 </button>
               ) : (
                 <button
@@ -392,7 +463,7 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
               <button
                 onClick={() => setShowDeleteModal(true)}
                 className="px-3.5 py-2 rounded-xl bg-rose-50 dark:bg-rose-950/60 hover:bg-rose-100 dark:hover:bg-rose-900/80 border border-rose-200 dark:border-rose-500/30 text-rose-700 dark:text-rose-300 font-extrabold text-xs flex items-center space-x-1.5 transition-colors shadow-xs"
-                title="Delete Lead"
+                title="Delete RFQ"
               >
                 <Trash2 className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400" />
                 <span>Delete</span>
@@ -412,7 +483,7 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
             }`}
           >
             <FileText className="w-3.5 h-3.5" />
-            <span>Lead Specifications & Attachments</span>
+            <span>RFQ Specifications & Attachments</span>
           </button>
 
           <button
@@ -440,7 +511,7 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
             <span className="w-5 h-5 rounded-full bg-indigo-600 text-white dark:bg-indigo-600/40 dark:text-indigo-200 text-[10px] font-black flex items-center justify-center">
               4
             </span>
-            <span>Step 4 — Prepare & Send Lead</span>
+            <span>Step 4 — Prepare & Send RFQ</span>
           </button>
         </div>
       </div>
@@ -461,8 +532,8 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
                 </h3>
                 <p className="text-xs text-slate-600 dark:text-slate-400 font-medium">
                   {isEditing
-                    ? 'Update lead parameters below and click Save Changes.'
-                    : 'Read-only view. Click "Edit Lead" or the toggle button to make changes.'}
+                    ? 'Update RFQ parameters below and click Save Changes.'
+                    : 'Read-only view. Click "Edit RFQ" or the toggle button to make changes.'}
                 </p>
               </div>
 
@@ -472,7 +543,7 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
                   className="px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-extrabold text-xs shadow-md shadow-indigo-600/20 flex items-center space-x-1.5 transition-all"
                 >
                   <Pencil className="w-3.5 h-3.5" />
-                  <span>Edit Lead Details</span>
+                  <span>Edit RFQ Details</span>
                 </button>
               ) : (
                 <div className="flex items-center space-x-2">
@@ -489,13 +560,13 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
             {/* READ ONLY MODE */}
             {!isEditing ? (
               <div className="space-y-6">
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 bg-slate-50 dark:bg-slate-900/80 p-4 rounded-xl border border-slate-200 dark:border-slate-800 text-xs">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 bg-slate-50 dark:bg-slate-900/80 p-4 rounded-xl border border-slate-200 dark:border-slate-800 text-xs">
                   <div>
                     <span className="text-slate-500 dark:text-slate-400 block font-bold">Customer Name</span>
                     <span className="font-extrabold text-slate-900 dark:text-slate-100 text-sm">{lead.customer_name}</span>
                   </div>
                   <div>
-                    <span className="text-slate-500 dark:text-slate-400 block font-bold">PO / Lead Title</span>
+                    <span className="text-slate-500 dark:text-slate-400 block font-bold">PO / RFQ Title</span>
                     <span className="font-extrabold text-slate-900 dark:text-slate-200">{lead.lead_name}</span>
                   </div>
                   <div>
@@ -503,10 +574,6 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
                     <span className="text-slate-900 dark:text-slate-200 font-extrabold">
                       {lead.categories?.name || 'Unassigned'}
                     </span>
-                  </div>
-                  <div>
-                    <span className="text-slate-500 dark:text-slate-400 block font-bold">Required Due Date</span>
-                    <span className="text-slate-900 dark:text-slate-300 font-bold">{formatDate(lead.due_date)}</span>
                   </div>
                 </div>
 
@@ -517,10 +584,6 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
                     (acc, it) => acc + (it.quantity || 0) * (it.unit_price_estimate || 0),
                     0
                   );
-                  const gstRate = lead.gst_rate || 18;
-                  const gstVal = subtotal * (gstRate / 100);
-                  const totalVal = subtotal + gstVal;
-
                   return (
                     <div className="space-y-3">
                       <div className="flex items-center justify-between">
@@ -538,92 +601,37 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
                           <thead>
                             <tr className="bg-slate-100/80 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 text-[11px] font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider">
                               <th className="py-2.5 px-3.5 w-12 text-center">#</th>
-                              <th className="py-2.5 px-3.5">Product / Item Description</th>
-                              <th className="py-2.5 px-3.5 w-20 text-center">Qty</th>
-                              <th className="py-2.5 px-3.5 w-32 text-right">Est. Unit Price</th>
-                              <th className="py-2.5 px-3.5 w-36 text-right">Line Subtotal</th>
+                              <th className="py-2.5 px-3.5">Product / Item Description & Specifications</th>
+                              <th className="py-2.5 px-3.5 w-24 text-right">Qty</th>
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-200 dark:divide-slate-800/80 text-xs">
-                            {items.map((it, idx) => {
-                              const lineSub = (it.quantity || 0) * (it.unit_price_estimate || 0);
-
-                              return (
-                                <tr key={it.id || idx} className="hover:bg-slate-50/50 dark:hover:bg-slate-900/40 transition-colors">
-                                  <td className="py-3 px-3.5 text-center font-mono font-bold text-slate-400">
-                                    {idx + 1}
-                                  </td>
-                                  <td className="py-3 px-3.5">
-                                    <div className="font-extrabold text-slate-900 dark:text-slate-100">
-                                      {it.product_item || 'Procurement Item'}
+                            {items.map((it, idx) => (
+                              <tr key={it.id || idx} className="hover:bg-slate-50/50 dark:hover:bg-slate-900/40 transition-colors">
+                                <td className="py-3 px-3.5 text-center font-mono font-bold text-slate-400">
+                                  {idx + 1}
+                                </td>
+                                <td className="py-3 px-3.5">
+                                  <div className="font-extrabold text-slate-900 dark:text-slate-100">
+                                    {it.product_item || 'Procurement Item'}
+                                  </div>
+                                  {it.specifications && (
+                                    <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 font-medium whitespace-pre-line leading-relaxed">
+                                      {it.specifications}
                                     </div>
-                                    {it.specifications && (
-                                      <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 font-medium leading-tight">
-                                        {it.specifications}
-                                      </div>
-                                    )}
-                                  </td>
-                                  <td className="py-3 px-3.5 text-center font-bold text-indigo-600 dark:text-indigo-400">
-                                    {it.quantity}
-                                  </td>
-                                  <td className="py-3 px-3.5 text-right font-mono font-semibold text-slate-700 dark:text-slate-300">
-                                    {it.unit_price_estimate ? `₹${it.unit_price_estimate.toLocaleString('en-IN')}` : '—'}
-                                  </td>
-                                  <td className="py-3 px-3.5 text-right font-mono font-bold text-slate-900 dark:text-slate-100">
-                                    {lineSub > 0 ? `₹${lineSub.toLocaleString('en-IN')}` : '—'}
-                                  </td>
-                                </tr>
-                              );
-                            })}
+                                  )}
+                                </td>
+                                <td className="py-3 px-3.5 text-right font-bold text-indigo-600 dark:text-indigo-400">
+                                  {it.quantity} {it.quantity > 1 ? 'units' : 'unit'}
+                                </td>
+                              </tr>
+                            ))}
                           </tbody>
-                          {subtotal > 0 && (
-                            <tfoot className="bg-slate-50 dark:bg-slate-900/90 border-t border-slate-200 dark:border-slate-800 text-xs">
-                              <tr>
-                                <td colSpan={4} className="py-2 px-3.5 text-right font-bold text-slate-600 dark:text-slate-400">
-                                  Subtotal:
-                                </td>
-                                <td className="py-2 px-3.5 text-right font-mono font-bold text-slate-900 dark:text-slate-100">
-                                  ₹{subtotal.toLocaleString('en-IN')}
-                                </td>
-                              </tr>
-                              <tr>
-                                <td colSpan={4} className="py-2 px-3.5 text-right font-bold text-slate-600 dark:text-slate-400">
-                                  GST ({gstRate}%):
-                                </td>
-                                <td className="py-2 px-3.5 text-right font-mono font-semibold text-slate-600 dark:text-slate-400">
-                                  ₹{gstVal.toLocaleString('en-IN')}
-                                </td>
-                              </tr>
-                              <tr className="border-t border-slate-200 dark:border-slate-800">
-                                <td colSpan={4} className="py-2.5 px-3.5 text-right font-extrabold text-slate-900 dark:text-slate-100">
-                                  Grand Total Estimated:
-                                </td>
-                                <td className="py-2.5 px-3.5 text-right font-mono font-extrabold text-emerald-600 dark:text-emerald-400 text-sm">
-                                  ₹{totalVal.toLocaleString('en-IN')}
-                                </td>
-                              </tr>
-                            </tfoot>
-                          )}
                         </table>
                       </div>
                     </div>
                   );
                 })()}
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
-                  <div>
-                    <span className="text-slate-700 dark:text-slate-400 font-bold block mb-1">Delivery Terms</span>
-                    <div className="bg-slate-50 dark:bg-slate-900 p-3 rounded-xl border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-300 font-semibold">
-                      {lead.delivery_terms || 'Standard shipping'}
-                    </div>
-                  </div>
-                  <div>
-                    <span className="text-slate-700 dark:text-slate-400 font-bold block mb-1">Warranty Required</span>
-                    <div className="bg-slate-50 dark:bg-slate-900 p-3 rounded-xl border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-300 font-semibold">
-                      {lead.warranty || '1 Year Standard Warranty'}
-                    </div>
-                  </div>
-                </div>
 
                 <div>
                   <span className="text-slate-700 dark:text-slate-400 text-xs font-bold block mb-1.5">
@@ -637,19 +645,19 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
             ) : (
               /* EDITING MODE FORM */
               <form onSubmit={handleSaveLeadEdit} className="space-y-6 animate-fade-in">
-                {/* Basic Identification */}
+                {/* 1. Customer & RFQ Identification */}
                 <div className="space-y-4">
                   <div className="flex items-center space-x-2 pb-2 border-b border-slate-200 dark:border-slate-800">
                     <Building2 className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
                     <h4 className="text-xs font-extrabold uppercase tracking-wider text-slate-800 dark:text-slate-200">
-                      1. Customer & Product Details
+                      1. Customer & RFQ Identification
                     </h4>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 text-xs">
                     <div>
                       <label className="block text-slate-700 dark:text-slate-300 font-bold mb-1.5">
-                        Customer Name <span className="text-rose-500 font-black">*</span>
+                        Customer / Client Name <span className="text-rose-500 font-black">*</span>
                       </label>
                       <input
                         type="text"
@@ -662,33 +670,26 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
 
                     <div>
                       <label className="block text-slate-700 dark:text-slate-300 font-bold mb-1.5">
-                        PO / Lead Title <span className="text-rose-500 font-black">*</span>
+                        PO / RFQ Reference Number <span className="text-rose-500 font-black">*</span>
                       </label>
-                      <input
-                        type="text"
-                        required
-                        value={editFormData.lead_name}
-                        onChange={(e) => setEditFormData({ ...editFormData, lead_name: e.target.value })}
-                        className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-slate-900 dark:text-slate-100 font-semibold focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all"
-                      />
+                      <div className="flex rounded-xl overflow-hidden border border-slate-200 dark:border-slate-800 focus-within:border-indigo-500 focus-within:ring-2 focus-within:ring-indigo-500/20 shadow-2xs">
+                        <span className="inline-flex items-center px-3.5 bg-slate-100 dark:bg-slate-800/80 text-slate-700 dark:text-slate-300 font-mono font-bold text-xs border-r border-slate-200 dark:border-slate-800 select-none shrink-0">
+                          PR-
+                        </span>
+                        <input
+                          type="text"
+                          required
+                          placeholder="e.g. 10023"
+                          value={editFormData.lead_name}
+                          onChange={(e) => setEditFormData({ ...editFormData, lead_name: extractPrNumber(e.target.value) })}
+                          className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-slate-100 font-semibold focus:outline-none"
+                        />
+                      </div>
                     </div>
 
                     <div>
                       <label className="block text-slate-700 dark:text-slate-300 font-bold mb-1.5">
-                        Product / Item Required <span className="text-rose-500 font-black">*</span>
-                      </label>
-                      <input
-                        type="text"
-                        required
-                        value={editFormData.product_item}
-                        onChange={(e) => setEditFormData({ ...editFormData, product_item: e.target.value })}
-                        className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-slate-900 dark:text-slate-100 font-semibold focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-slate-700 dark:text-slate-300 font-bold mb-1.5">
-                        Category
+                        Product Category
                       </label>
                       <select
                         value={editFormData.category_id}
@@ -703,36 +704,10 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
                         ))}
                       </select>
                     </div>
-                  </div>
-                </div>
-
-                {/* Quantities & Financials */}
-                <div className="space-y-4">
-                  <div className="flex items-center space-x-2 pb-2 border-b border-slate-200 dark:border-slate-800">
-                    <DollarSign className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                    <h4 className="text-xs font-extrabold uppercase tracking-wider text-slate-800 dark:text-slate-200">
-                      2. Quantities, Status & Commercials
-                    </h4>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 text-xs">
-                    <div>
-                      <label className="block text-slate-700 dark:text-slate-300 font-bold mb-1.5">
-                        Quantity <span className="text-rose-500 font-black">*</span>
-                      </label>
-                      <input
-                        type="number"
-                        min="1"
-                        required
-                        value={editFormData.quantity}
-                        onChange={(e) => setEditFormData({ ...editFormData, quantity: Number(e.target.value) })}
-                        className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-indigo-700 dark:text-indigo-400 font-extrabold focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all"
-                      />
-                    </div>
 
                     <div>
                       <label className="block text-slate-700 dark:text-slate-300 font-bold mb-1.5">
-                        Status Workflow
+                        Workflow Status
                       </label>
                       <select
                         value={editFormData.status}
@@ -747,99 +722,118 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
                         <option value="cancelled">Cancelled</option>
                       </select>
                     </div>
-
-                    <div>
-                      <label className="block text-slate-700 dark:text-slate-300 font-bold mb-1.5">
-                        Required Due Date
-                      </label>
-                      <input
-                        type="date"
-                        value={editFormData.due_date}
-                        onChange={(e) => setEditFormData({ ...editFormData, due_date: e.target.value })}
-                        className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-slate-900 dark:text-slate-100 font-semibold focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all cursor-pointer"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-slate-700 dark:text-slate-300 font-bold mb-1.5">
-                        Unit Price Estimate (₹)
-                      </label>
-                      <input
-                        type="number"
-                        placeholder="e.g. 50000"
-                        value={editFormData.unit_price_estimate}
-                        onChange={(e) => setEditFormData({ ...editFormData, unit_price_estimate: e.target.value })}
-                        className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-slate-900 dark:text-slate-100 font-semibold focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-slate-700 dark:text-slate-300 font-bold mb-1.5">
-                        Target GST Rate (%)
-                      </label>
-                      <input
-                        type="number"
-                        step="0.1"
-                        value={editFormData.gst_rate}
-                        onChange={(e) => setEditFormData({ ...editFormData, gst_rate: Number(e.target.value) })}
-                        className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-slate-900 dark:text-slate-100 font-semibold focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all"
-                      />
-                    </div>
                   </div>
                 </div>
 
-                {/* Terms & Specs */}
+                {/* 2. Procurement Line Items Dynamic Editor */}
+                <div className="bg-slate-50/70 dark:bg-slate-900/50 border border-slate-200/80 dark:border-slate-800/80 rounded-xl p-4 space-y-4">
+                  <div className="flex items-center justify-between pb-2 border-b border-slate-200 dark:border-slate-800">
+                    <div className="flex items-center space-x-2">
+                      <ListOrdered className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                      <h4 className="text-xs font-extrabold uppercase tracking-wider text-slate-800 dark:text-slate-200">
+                        2. Procurement Line Items ({lineItems.length})
+                      </h4>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handleAddLineItem}
+                      className="px-3 py-1.5 rounded-lg text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-500 shadow-sm shadow-indigo-600/30 flex items-center space-x-1.5 transition-all active:scale-[0.98]"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Add Line Item</span>
+                    </button>
+                  </div>
+
+                  <div className="space-y-3.5">
+                    {lineItems.map((item, idx) => (
+                      <div
+                        key={item.id || idx}
+                        className="p-3.5 sm:p-4 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800/90 rounded-xl space-y-3 relative group shadow-xs transition-all"
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center space-x-2">
+                            <span className="w-5 h-5 rounded-md bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 font-mono text-[10px] font-bold flex items-center justify-center border border-indigo-200 dark:border-indigo-800/50">
+                              #{idx + 1}
+                            </span>
+                            <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                              Line Item #{idx + 1}
+                            </span>
+                          </div>
+
+                          {lineItems.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveLineItem(idx)}
+                              className="p-1 text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/50 rounded-lg transition-colors"
+                              title="Remove item"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 text-xs">
+                          <div className="sm:col-span-8">
+                            <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
+                              Product / Item Description <span className="text-rose-500">*</span>
+                            </label>
+                            <input
+                              type="text"
+                              required
+                              placeholder="e.g. HP ProBook 450 G10"
+                              value={item.product_item || ''}
+                              onChange={(e) => handleUpdateLineItem(idx, 'product_item', e.target.value)}
+                              className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg text-xs font-semibold text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:border-indigo-500"
+                            />
+                          </div>
+
+                          <div className="sm:col-span-4">
+                            <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
+                              Quantity <span className="text-rose-500">*</span>
+                            </label>
+                            <input
+                              type="number"
+                              min={1}
+                              required
+                              value={item.quantity}
+                              onChange={(e) =>
+                                handleUpdateLineItem(idx, 'quantity', parseInt(e.target.value) || 1)
+                              }
+                              className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg text-xs font-bold text-indigo-600 dark:text-indigo-400 focus:outline-none focus:border-indigo-500"
+                            />
+                          </div>
+
+                          <div className="sm:col-span-12">
+                            <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
+                              Description & Technical Specifications
+                            </label>
+                            <textarea
+                              rows={3}
+                              placeholder={`e.g.\ni5 11th Gen Processor\n16GB DDR4 RAM\n512GB NVMe SSD...`}
+                              value={item.specifications || ''}
+                              onChange={(e) => handleUpdateLineItem(idx, 'specifications', e.target.value)}
+                              className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg text-xs font-medium text-slate-800 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:border-indigo-500 leading-relaxed resize-y"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* 3. Remarks & Special Notes */}
                 <div className="space-y-4">
                   <div className="flex items-center space-x-2 pb-2 border-b border-slate-200 dark:border-slate-800">
                     <Shield className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
                     <h4 className="text-xs font-extrabold uppercase tracking-wider text-slate-800 dark:text-slate-200">
-                      3. Specifications & Terms
+                      3. Remarks & Special Notes
                     </h4>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-                    <div>
-                      <label className="block text-slate-700 dark:text-slate-300 font-bold mb-1.5">
-                        Delivery & Shipping Terms
-                      </label>
-                      <input
-                        type="text"
-                        placeholder="e.g. Doorstep Delivery within 7 days"
-                        value={editFormData.delivery_terms}
-                        onChange={(e) => setEditFormData({ ...editFormData, delivery_terms: e.target.value })}
-                        className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-slate-900 dark:text-slate-100 font-semibold focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-slate-700 dark:text-slate-300 font-bold mb-1.5">
-                        Warranty Requirements
-                      </label>
-                      <input
-                        type="text"
-                        placeholder="e.g. 1 Year Manufacturer Warranty"
-                        value={editFormData.warranty}
-                        onChange={(e) => setEditFormData({ ...editFormData, warranty: e.target.value })}
-                        className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-slate-900 dark:text-slate-100 font-semibold focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all"
-                      />
-                    </div>
-                  </div>
-
                   <div>
                     <label className="block text-slate-700 dark:text-slate-300 font-bold mb-1.5 text-xs">
-                      Technical Specifications
-                    </label>
-                    <textarea
-                      rows={3}
-                      value={editFormData.specifications}
-                      onChange={(e) => setEditFormData({ ...editFormData, specifications: e.target.value })}
-                      className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-slate-900 dark:text-slate-100 font-medium text-xs focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all leading-relaxed"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-slate-700 dark:text-slate-300 font-bold mb-1.5 text-xs">
-                      Remarks / Special Notes
+                      General Remarks / Special Terms
                     </label>
                     <textarea
                       rows={2}
@@ -948,11 +942,11 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
               </p>
             </div>
 
-            <div className="flex items-center space-x-3">
+            <div className="flex flex-col sm:flex-row items-center gap-2.5">
               <select
                 value={selectedCategoryFilter}
-                onChange={(e) => setSelectedCategoryFilter(e.target.value)}
-                className="px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-xs text-slate-900 dark:text-slate-200 font-bold focus:outline-none focus:border-indigo-500"
+                onChange={(e) => handleCategoryFilterChange(e.target.value)}
+                className="px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-xs text-slate-900 dark:text-slate-200 font-bold focus:outline-none focus:border-indigo-500 cursor-pointer"
               >
                 <option value="all">All Categories</option>
                 {categories.map((c) => (
@@ -961,6 +955,14 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
                   </option>
                 ))}
               </select>
+
+              <button
+                type="button"
+                onClick={handleSelectAllCategoryVendors}
+                className="px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold transition-colors whitespace-nowrap"
+              >
+                Select All Category Vendors
+              </button>
 
               <input
                 type="text"
@@ -973,7 +975,7 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
               <button
                 onClick={handleSaveVendorSelection}
                 disabled={loading}
-                className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-extrabold text-xs shadow-md shadow-indigo-600/30 flex items-center space-x-2 disabled:opacity-50 transition-all"
+                className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-extrabold text-xs shadow-md shadow-indigo-600/30 flex items-center space-x-2 disabled:opacity-50 transition-all whitespace-nowrap"
               >
                 {loading && <Loader2 className="w-4 h-4 animate-spin" />}
                 <span>Save & Continue to Step 4 →</span>
@@ -1087,28 +1089,16 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
               </div>
 
               <div className="bg-white dark:bg-slate-900/90 p-4 rounded-xl border border-slate-200 dark:border-slate-800 space-y-1.5 font-sans shadow-xs">
-                <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="grid grid-cols-1 gap-2 text-xs">
                   <div>
-                    <span className="text-slate-500 dark:text-slate-400 block font-bold">Lead ID:</span>
+                    <span className="text-slate-500 dark:text-slate-400 block font-bold">RFQ Reference ID:</span>
                     <span className="font-mono text-indigo-700 dark:text-indigo-300 font-bold">{lead.lead_number}</span>
-                  </div>
-                  <div>
-                    <span className="text-slate-500 dark:text-slate-400 block font-bold">Client Ref:</span>
-                    <span className="text-slate-900 dark:text-slate-200 font-bold">{lead.lead_name}</span>
                   </div>
                   <div className="col-span-2">
                     <span className="text-slate-500 dark:text-slate-400 block font-bold mb-0.5">Product / Requirement Breakdown:</span>
                     <div className="text-slate-900 dark:text-slate-100 font-extrabold whitespace-pre-line text-xs">
                       {formatLineItemsSummaryText(lead)}
                     </div>
-                  </div>
-                  <div>
-                    <span className="text-slate-500 dark:text-slate-400 block font-bold">Required Due Date:</span>
-                    <span className="text-slate-900 dark:text-slate-200 font-bold">{formatDate(lead.due_date)}</span>
-                  </div>
-                  <div>
-                    <span className="text-slate-500 dark:text-slate-400 block font-bold">Target GST:</span>
-                    <span className="text-slate-900 dark:text-slate-200 font-bold">{lead.gst_rate || 18}%</span>
                   </div>
                 </div>
               </div>
@@ -1117,17 +1107,6 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
                 <span className="text-slate-700 dark:text-slate-400 block font-bold mb-1">TECHNICAL SPECIFICATIONS & LINE ITEMS:</span>
                 <div className="bg-white dark:bg-slate-900 p-3 rounded-xl border border-slate-200 dark:border-slate-800 font-sans text-slate-800 dark:text-slate-300 font-medium whitespace-pre-line leading-relaxed">
                   {formatReadableSpecifications(lead)}
-                </div>
-              </div>
-
-              <div>
-                <span className="text-slate-700 dark:text-slate-400 block font-bold mb-1">COMMERCIAL & WARRANTY TERMS:</span>
-                <div className="bg-white dark:bg-slate-900 p-3 rounded-xl border border-slate-200 dark:border-slate-800 font-sans text-slate-800 dark:text-slate-300 space-y-1 text-[11px] font-medium">
-                  <p>• Delivery Terms: {lead.delivery_terms || 'Standard shipping'}</p>
-                  <p>• Warranty Required: {lead.warranty || '1 Year'}</p>
-                  {lead.unit_price_estimate && (
-                    <p>• Indicative Target Price: {formatCurrency(lead.unit_price_estimate)}</p>
-                  )}
                 </div>
               </div>
 
@@ -1311,13 +1290,13 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
                 <AlertTriangle className="w-6 h-6" />
               </div>
               <div>
-                <h3 className="font-extrabold text-slate-900 dark:text-slate-100 text-base">Delete Lead</h3>
+                <h3 className="font-extrabold text-slate-900 dark:text-slate-100 text-base">Delete RFQ</h3>
                 <p className="text-xs text-slate-600 dark:text-slate-400 font-medium">This action cannot be undone.</p>
               </div>
             </div>
 
             <p className="text-xs text-slate-700 dark:text-slate-300 leading-relaxed font-medium">
-              Are you sure you want to permanently delete lead{' '}
+              Are you sure you want to permanently delete RFQ{' '}
               <strong className="font-mono text-indigo-700 dark:text-indigo-400">{lead.lead_number}</strong> (
               {lead.customer_name} - {lead.product_item})? All associated attachments, vendor assignments, and message logs will be permanently deleted.
             </p>
@@ -1341,7 +1320,7 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
                 ) : (
                   <Trash2 className="w-4 h-4" />
                 )}
-                <span>Delete Lead Permanently</span>
+                <span>Delete RFQ Permanently</span>
               </button>
             </div>
           </div>

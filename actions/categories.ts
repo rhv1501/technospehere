@@ -55,15 +55,33 @@ export async function getCategoriesWithStats() {
 
 export async function createCategory(formData: { name: string; description?: string }) {
   try {
-    if (!formData.name || !formData.name.trim()) {
+    const trimmedName = formData.name?.trim();
+    if (!trimmedName) {
       return { success: false, error: 'Category name is required' };
     }
 
     const supabase = createAdminClient();
+
+    // Case-insensitive duplicate check
+    const { data: existingCategories } = await supabase
+      .from('categories')
+      .select('id, name');
+
+    const isDuplicate = (existingCategories || []).some(
+      (c) => c.name.trim().toLowerCase() === trimmedName.toLowerCase()
+    );
+
+    if (isDuplicate) {
+      return {
+        success: false,
+        error: `Category "${trimmedName}" already exists. Duplicate category names are not allowed.`,
+      };
+    }
+
     const { data, error } = await supabase
       .from('categories')
       .insert({
-        name: formData.name.trim(),
+        name: trimmedName,
         description: formData.description?.trim() || null,
       })
       .select()
@@ -71,7 +89,7 @@ export async function createCategory(formData: { name: string; description?: str
 
     if (error) {
       if (error.code === '23505') {
-        return { success: false, error: 'A category with this name already exists' };
+        return { success: false, error: `Category "${trimmedName}" already exists. Duplicate category names are not allowed.` };
       }
       throw error;
     }
@@ -89,15 +107,33 @@ export async function createCategory(formData: { name: string; description?: str
 
 export async function updateCategory(id: string, formData: { name: string; description?: string }) {
   try {
-    if (!formData.name || !formData.name.trim()) {
+    const trimmedName = formData.name?.trim();
+    if (!trimmedName) {
       return { success: false, error: 'Category name is required' };
     }
 
     const supabase = createAdminClient();
+
+    // Case-insensitive duplicate check
+    const { data: existingCategories } = await supabase
+      .from('categories')
+      .select('id, name');
+
+    const isDuplicate = (existingCategories || []).some(
+      (c) => c.id !== id && c.name.trim().toLowerCase() === trimmedName.toLowerCase()
+    );
+
+    if (isDuplicate) {
+      return {
+        success: false,
+        error: `Category "${trimmedName}" already exists. Duplicate category names are not allowed.`,
+      };
+    }
+
     const { data, error } = await supabase
       .from('categories')
       .update({
-        name: formData.name.trim(),
+        name: trimmedName,
         description: formData.description?.trim() || null,
       })
       .eq('id', id)
@@ -106,7 +142,7 @@ export async function updateCategory(id: string, formData: { name: string; descr
 
     if (error) {
       if (error.code === '23505') {
-        return { success: false, error: 'Another category already exists with this name' };
+        return { success: false, error: `Category "${trimmedName}" already exists. Duplicate category names are not allowed.` };
       }
       throw error;
     }

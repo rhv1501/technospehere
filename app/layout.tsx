@@ -1,7 +1,8 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import { Geist, Geist_Mono } from 'next/font/google';
 import { ThemeProvider } from '@/components/theme/ThemeProvider';
 import { ThemedToaster } from '@/components/theme/ThemedToaster';
+import { PwaRegister } from '@/components/pwa/PwaRegister';
 import './globals.css';
 
 const geistSans = Geist({
@@ -15,8 +16,25 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'TechnoSphere | Vendor Quotation Management System',
-  description: 'Production-ready Vendor Onboarding, Lead Management, Category Matching & Quotation Dispatch System',
+  title: 'TechnoSphere | Enterprise RFQ & Vendor Management System',
+  description: 'Enterprise B2B Procurement, RFQ Quotation Management & Vendor Portal',
+  manifest: '/manifest.json',
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: 'black-translucent',
+    title: 'TechnoSphere',
+  },
+  icons: {
+    icon: '/icons/icon-192x192.png',
+    apple: '/icons/icon-192x192.png',
+  },
+};
+
+export const viewport: Viewport = {
+  themeColor: '#4338ca',
+  width: 'device-width',
+  initialScale: 1,
+  maximumScale: 5,
 };
 
 const themeInitScript = `
@@ -57,10 +75,11 @@ export default function RootLayout({
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
       </head>
-      <body className="min-h-full flex flex-col bg-slate-50 dark:bg-[#090d16] text-slate-900 dark:text-slate-100 selection:bg-indigo-500 selection:text-white transition-colors duration-200">
+        <body className="min-h-full flex flex-col bg-slate-50 dark:bg-[#090d16] text-slate-900 dark:text-slate-100 selection:bg-indigo-500 selection:text-white transition-colors duration-200">
         <ThemeProvider>
           {children}
           <ThemedToaster />
+          <PwaRegister />
         </ThemeProvider>
       </body>
     </html>

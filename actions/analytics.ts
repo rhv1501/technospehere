@@ -1,15 +1,22 @@
 'use server';
 
 import { createAdminClient } from '@/lib/supabase/admin';
+import { parseLineItemsFromLead } from '@/lib/leadUtils';
 
 export interface AnalyticsSummary {
+  leads: any[];
+  vendors: any[];
+  categories: any[];
+  registrations: any[];
+  logs: any[];
   totalLeads: number;
   totalVendors: number;
   activeVendors: number;
   inactiveVendors: number;
   pendingRegistrations: number;
-  totalEstimatedBudget: number;
-  avgLeadQuantity: number;
+  totalUnits: number;
+  totalLineItemsCount: number;
+  avgUnitsPerRfq: number;
   totalEmailsSent: number;
   totalWhatsAppPrepared: number;
   leadsByStatus: Record<string, number>;
@@ -23,9 +30,19 @@ export interface AnalyticsSummary {
     categoryId: string;
     categoryName: string;
     leadCount: number;
-    totalBudget: number;
+    totalUnits: number;
   }>;
-  topLeadsByBudget: any[];
+  topLeadsByQuantity: Array<{
+    id: string;
+    lead_number: string;
+    customer_name: string;
+    product_item: string;
+    quantity: number;
+    lineItemsCount: number;
+    status: string;
+    vendorsCount: number;
+    created_at: string;
+  }>;
   recentActivityLogs: any[];
 }
 
@@ -56,7 +73,7 @@ export async function getAnalyticsData() {
         *,
         leads ( lead_number, customer_name ),
         vendors ( company_name )
-      `).order('created_at', { ascending: false }).limit(10),
+      `).order('created_at', { ascending: false }).limit(20),
     ]);
 
     const leads = leadsRes.data || [];
@@ -72,17 +89,18 @@ export async function getAnalyticsData() {
     const inactiveVendors = vendors.filter((v) => v.status === 'inactive').length;
     const pendingRegistrations = registrations.filter((r) => r.status === 'pending').length;
 
-    // Financials & Quantities
-    let totalEstimatedBudget = 0;
-    let totalQuantity = 0;
+    // Unit Volume & Line Items
+    let totalUnits = 0;
+    let totalLineItemsCount = 0;
+
     leads.forEach((l) => {
-      totalQuantity += l.quantity || 0;
-      if (l.unit_price_estimate && l.quantity) {
-        totalEstimatedBudget += Number(l.unit_price_estimate) * Number(l.quantity);
-      }
+      const items = parseLineItemsFromLead(l);
+      totalLineItemsCount += items.length || 1;
+      const rfqUnits = items.reduce((acc, item) => acc + (Number(item.quantity) || 1), 0);
+      totalUnits += rfqUnits || l.quantity || 0;
     });
 
-    const avgLeadQuantity = totalLeads > 0 ? Math.round(totalQuantity / totalLeads) : 0;
+    const avgUnitsPerRfq = totalLeads > 0 ? Math.round(totalUnits / totalLeads) : 0;
 
     // Message dispatch counts
     let totalEmailsSent = 0;
@@ -94,7 +112,7 @@ export async function getAnalyticsData() {
       });
     });
 
-    // Lead Status Breakdown
+    // RFQ Status Breakdown
     const leadsByStatus: Record<string, number> = {
       draft: 0,
       ready_to_send: 0,
@@ -123,66 +141,83 @@ export async function getAnalyticsData() {
       };
     });
 
-    // Leads by Category
+    // RFQs by Category
     const leadsByCategory = categories.map((cat) => {
       const catLeads = leads.filter((l) => l.category_id === cat.id);
-      let catBudget = 0;
+      let catUnits = 0;
       catLeads.forEach((l) => {
-        if (l.unit_price_estimate && l.quantity) {
-          catBudget += Number(l.unit_price_estimate) * Number(l.quantity);
-        }
+        const items = parseLineItemsFromLead(l);
+        const rfqUnits = items.reduce((acc, item) => acc + (Number(item.quantity) || 1), 0);
+        catUnits += rfqUnits || l.quantity || 0;
       });
 
       return {
         categoryId: cat.id,
         categoryName: cat.name,
         leadCount: catLeads.length,
-        totalBudget: catBudget,
+        totalUnits: catUnits,
       };
     }).filter((c) => c.leadCount > 0);
 
     // Unassigned category leads
     const unassignedLeads = leads.filter((l) => !l.category_id);
     if (unassignedLeads.length > 0) {
-      let unassignedBudget = 0;
+      let unassignedUnits = 0;
       unassignedLeads.forEach((l) => {
-        if (l.unit_price_estimate && l.quantity) {
-          unassignedBudget += Number(l.unit_price_estimate) * Number(l.quantity);
-        }
+        const items = parseLineItemsFromLead(l);
+        const rfqUnits = items.reduce((acc, item) => acc + (Number(item.quantity) || 1), 0);
+        unassignedUnits += rfqUnits || l.quantity || 0;
       });
       leadsByCategory.push({
         categoryId: 'unassigned',
         categoryName: 'Unassigned Category',
         leadCount: unassignedLeads.length,
-        totalBudget: unassignedBudget,
+        totalUnits: unassignedUnits,
       });
     }
 
-    // Top 5 leads by calculated estimated value
-    const topLeadsByBudget = [...leads]
-      .map((l) => ({
-        ...l,
-        total_value: (l.quantity || 1) * (l.unit_price_estimate || 0),
-      }))
-      .sort((a, b) => b.total_value - a.total_value)
-      .slice(0, 5);
+    // Top RFQs by unit quantity volume
+    const topLeadsByQuantity = [...leads]
+      .map((l) => {
+        const items = parseLineItemsFromLead(l);
+        const quantity = items.reduce((acc, item) => acc + (Number(item.quantity) || 1), 0) || l.quantity || 1;
+        return {
+          id: l.id,
+          lead_number: l.lead_number,
+          customer_name: l.customer_name,
+          product_item: l.product_item,
+          quantity,
+          lineItemsCount: items.length || 1,
+          status: l.status || 'draft',
+          vendorsCount: (l.lead_vendors || []).length,
+          created_at: l.created_at,
+        };
+      })
+      .sort((a, b) => b.quantity - a.quantity)
+      .slice(0, 6);
 
     return {
       success: true,
       data: {
+        leads,
+        vendors,
+        categories,
+        registrations,
+        logs,
         totalLeads,
         totalVendors,
         activeVendors,
         inactiveVendors,
         pendingRegistrations,
-        totalEstimatedBudget,
-        avgLeadQuantity,
+        totalUnits,
+        totalLineItemsCount,
+        avgUnitsPerRfq,
         totalEmailsSent,
         totalWhatsAppPrepared,
         leadsByStatus,
         vendorsByCategory,
         leadsByCategory,
-        topLeadsByBudget,
+        topLeadsByQuantity,
         recentActivityLogs: logs,
       },
     };

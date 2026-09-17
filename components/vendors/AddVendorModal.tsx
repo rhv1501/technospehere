@@ -118,73 +118,146 @@ export function AddVendorModal({
         </div>
 
         {/* Modal Form */}
-        <div className="p-5 sm:p-6 space-y-4 overflow-y-auto flex-1 min-h-0 custom-scrollbar">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                Company Name <span className="text-rose-500 font-bold">*</span>
-              </label>
-              <div className="relative">
-                <Building2 className="w-4 h-4 text-slate-400 dark:text-slate-500 absolute left-3 top-2.5" />
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. Apex Infotech Solutions"
-                  value={formData.company_name}
-                  onChange={(e) => setFormData({ ...formData, company_name: e.target.value })}
-                  className="w-full pl-9 pr-3 py-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-semibold text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
-                />
+        <div className="p-5 sm:p-6 space-y-5 overflow-y-auto flex-1 min-h-0 custom-scrollbar">
+          {/* Company Name */}
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+              Company Name <span className="text-rose-500 font-bold">*</span>
+            </label>
+            <div className="relative">
+              <Building2 className="w-4 h-4 text-slate-400 dark:text-slate-500 absolute left-3 top-2.5" />
+              <input
+                type="text"
+                required
+                placeholder="e.g. Apex Infotech Solutions"
+                value={formData.company_name}
+                onChange={(e) => setFormData({ ...formData, company_name: e.target.value })}
+                className="w-full pl-9 pr-3 py-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-semibold text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+              />
+            </div>
+          </div>
+
+          {/* Primary Contact Person (Mandatory) */}
+          <div className="bg-slate-50/80 dark:bg-slate-900/60 border border-slate-200/80 dark:border-slate-800/80 rounded-xl p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400 uppercase tracking-wider">
+                Primary Contact Person <span className="text-rose-500 font-bold">*</span>
+              </span>
+              <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800/50">
+                Compulsory
+              </span>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  Full Name <span className="text-rose-500 font-bold">*</span>
+                </label>
+                <div className="relative">
+                  <User className="w-3.5 h-3.5 text-slate-400 dark:text-slate-500 absolute left-2.5 top-2.5" />
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Rajesh Sharma"
+                    value={formData.contact_person}
+                    onChange={(e) => setFormData({ ...formData, contact_person: e.target.value })}
+                    className="w-full pl-8 pr-2.5 py-1.5 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-xs font-semibold text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  Email Address <span className="text-rose-500 font-bold">*</span>
+                </label>
+                <div className="relative">
+                  <Mail className="w-3.5 h-3.5 text-slate-400 dark:text-slate-500 absolute left-2.5 top-2.5" />
+                  <input
+                    type="email"
+                    required
+                    placeholder="rajesh@vendor.com"
+                    value={formData.email}
+                    onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                    className="w-full pl-8 pr-2.5 py-1.5 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-xs font-semibold text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  WhatsApp Number <span className="text-rose-500 font-bold">*</span>
+                </label>
+                <div className="relative">
+                  <Phone className="w-3.5 h-3.5 text-slate-400 dark:text-slate-500 absolute left-2.5 top-2.5" />
+                  <input
+                    type="text"
+                    required
+                    placeholder="+91 9876543210"
+                    value={formData.whatsapp_number}
+                    onChange={(e) => setFormData({ ...formData, whatsapp_number: e.target.value })}
+                    className="w-full pl-8 pr-2.5 py-1.5 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-xs font-semibold text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
               </div>
             </div>
+          </div>
 
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                Contact Person <span className="text-rose-500 font-bold">*</span>
-              </label>
-              <div className="relative">
-                <User className="w-4 h-4 text-slate-400 dark:text-slate-500 absolute left-3 top-2.5" />
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. Rajesh Sharma"
-                  value={formData.contact_person}
-                  onChange={(e) => setFormData({ ...formData, contact_person: e.target.value })}
-                  className="w-full pl-9 pr-3 py-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-semibold text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
-                />
-              </div>
+          {/* Secondary Contact Person (Optional) */}
+          <div className="bg-slate-50/50 dark:bg-slate-900/40 border border-slate-200/60 dark:border-slate-800/60 rounded-xl p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider">
+                Secondary Contact Person
+              </span>
+              <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-slate-200/70 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border border-slate-300 dark:border-slate-700/50">
+                Optional
+              </span>
             </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                Email Address <span className="text-rose-500 font-bold">*</span>
-              </label>
-              <div className="relative">
-                <Mail className="w-4 h-4 text-slate-400 dark:text-slate-500 absolute left-3 top-2.5" />
-                <input
-                  type="email"
-                  required
-                  placeholder="sales@vendor.com"
-                  value={formData.email}
-                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                  className="w-full pl-9 pr-3 py-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-semibold text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
-                />
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div>
+                <label className="block text-[11px] font-medium text-slate-600 dark:text-slate-400 mb-1">
+                  Full Name (Optional)
+                </label>
+                <div className="relative">
+                  <User className="w-3.5 h-3.5 text-slate-400 dark:text-slate-500 absolute left-2.5 top-2.5" />
+                  <input
+                    type="text"
+                    placeholder="e.g. Sunita Patel"
+                    value={formData.secondary_contact_person || ''}
+                    onChange={(e) => setFormData({ ...formData, secondary_contact_person: e.target.value })}
+                    className="w-full pl-8 pr-2.5 py-1.5 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-xs font-medium text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
               </div>
-            </div>
 
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                WhatsApp Number <span className="text-rose-500 font-bold">*</span>
-              </label>
-              <div className="relative">
-                <Phone className="w-4 h-4 text-slate-400 dark:text-slate-500 absolute left-3 top-2.5" />
-                <input
-                  type="text"
-                  required
-                  placeholder="+91 9876543210"
-                  value={formData.whatsapp_number}
-                  onChange={(e) => setFormData({ ...formData, whatsapp_number: e.target.value })}
-                  className="w-full pl-9 pr-3 py-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-semibold text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
-                />
+              <div>
+                <label className="block text-[11px] font-medium text-slate-600 dark:text-slate-400 mb-1">
+                  Email Address (Optional)
+                </label>
+                <div className="relative">
+                  <Mail className="w-3.5 h-3.5 text-slate-400 dark:text-slate-500 absolute left-2.5 top-2.5" />
+                  <input
+                    type="email"
+                    placeholder="sunita@vendor.com"
+                    value={formData.secondary_email || ''}
+                    onChange={(e) => setFormData({ ...formData, secondary_email: e.target.value })}
+                    className="w-full pl-8 pr-2.5 py-1.5 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-xs font-medium text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-medium text-slate-600 dark:text-slate-400 mb-1">
+                  Phone / Mobile (Optional)
+                </label>
+                <div className="relative">
+                  <Phone className="w-3.5 h-3.5 text-slate-400 dark:text-slate-500 absolute left-2.5 top-2.5" />
+                  <input
+                    type="text"
+                    placeholder="+91 9123456789"
+                    value={formData.secondary_phone || ''}
+                    onChange={(e) => setFormData({ ...formData, secondary_phone: e.target.value })}
+                    className="w-full pl-8 pr-2.5 py-1.5 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-xs font-medium text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
               </div>
             </div>
           </div>
@@ -246,7 +319,7 @@ export function AddVendorModal({
                 onChange={(e) => setFormData({ ...formData, status: e.target.value as 'active' | 'inactive' })}
                 className="w-full px-3 py-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-bold text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 cursor-pointer"
               >
-                <option value="active">Active (Available for Lead Assignment)</option>
+                <option value="active">Active (Available for RFQ Assignment)</option>
                 <option value="inactive">Inactive (Disabled)</option>
               </select>
             </div>

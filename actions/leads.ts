@@ -3,7 +3,7 @@
 import { createAdminClient } from '@/lib/supabase/admin';
 import { generateLeadNumber } from '@/lib/utils';
 import { revalidatePath } from 'next/cache';
-import { formatReadableSpecifications, cleanProductTitle } from '@/lib/leadUtils';
+import { formatReadableSpecifications, cleanProductTitle, parseLineItemsFromLead, cleanSpecifications, generateRfqEmailHtml } from '@/lib/leadUtils';
 import { getSystemSettings } from '@/actions/settings';
 import { ensureLeadRfqPdfInSupabase } from '@/actions/rfqPdf';
 import nodemailer from 'nodemailer';
@@ -14,12 +14,8 @@ export interface LeadInput {
   product_item: string;
   quantity: number;
   specifications?: string;
-  due_date?: string;
   category_id?: string;
-  delivery_terms?: string;
-  warranty?: string;
   unit_price_estimate?: number;
-  gst_rate?: number;
   remarks?: string;
   status?: 'draft' | 'ready_to_send' | 'sent' | 'quoted' | 'completed' | 'cancelled';
 }
@@ -135,12 +131,8 @@ export async function createLead(data: LeadInput) {
         product_item: data.product_item.trim(),
         quantity: Number(data.quantity) || 1,
         specifications: data.specifications?.trim() || null,
-        due_date: data.due_date || null,
         category_id: data.category_id || null,
-        delivery_terms: data.delivery_terms?.trim() || null,
-        warranty: data.warranty?.trim() || null,
         unit_price_estimate: data.unit_price_estimate != null ? Number(data.unit_price_estimate) : null,
-        gst_rate: data.gst_rate != null ? Number(data.gst_rate) : 18.0,
         remarks: data.remarks?.trim() || null,
         status: data.status || 'draft',
       })
@@ -148,6 +140,25 @@ export async function createLead(data: LeadInput) {
       .single();
 
     if (error) throw error;
+
+    // Auto-assign ALL active vendors belonging to the selected category
+    if (lead && lead.category_id) {
+      const { data: catVendors } = await supabase
+        .from('vendor_categories')
+        .select('vendor_id, vendors!inner(id, status)')
+        .eq('category_id', lead.category_id)
+        .eq('vendors.status', 'active');
+
+      if (catVendors && catVendors.length > 0) {
+        const rows = catVendors.map((cv: any) => ({
+          lead_id: lead.id,
+          vendor_id: cv.vendor_id,
+          email_sent: false,
+          whatsapp_prepared: false,
+        }));
+        await supabase.from('lead_vendors').insert(rows);
+      }
+    }
 
     revalidatePath('/dashboard/leads');
     revalidatePath('/dashboard');
@@ -168,12 +179,8 @@ export async function updateLead(id: string, data: Partial<LeadInput>) {
     if (data.product_item !== undefined) payload.product_item = data.product_item.trim();
     if (data.quantity !== undefined) payload.quantity = Number(data.quantity);
     if (data.specifications !== undefined) payload.specifications = data.specifications?.trim() || null;
-    if (data.due_date !== undefined) payload.due_date = data.due_date || null;
     if (data.category_id !== undefined) payload.category_id = data.category_id || null;
-    if (data.delivery_terms !== undefined) payload.delivery_terms = data.delivery_terms?.trim() || null;
-    if (data.warranty !== undefined) payload.warranty = data.warranty?.trim() || null;
     if (data.unit_price_estimate !== undefined) payload.unit_price_estimate = data.unit_price_estimate != null ? Number(data.unit_price_estimate) : null;
-    if (data.gst_rate !== undefined) payload.gst_rate = data.gst_rate != null ? Number(data.gst_rate) : 18.0;
     if (data.remarks !== undefined) payload.remarks = data.remarks?.trim() || null;
     if (data.status !== undefined) payload.status = data.status;
 
@@ -270,6 +277,24 @@ export async function uploadLeadAttachment(
 
     if (!leadId || !fileName || !buffer || buffer.length === 0) {
       return { success: false, error: 'Invalid file payload provided.' };
+    }
+
+    // Security Check 1: 15MB File Size Limit
+    const MAX_FILE_SIZE_BYTES = 15 * 1024 * 1024;
+    if (buffer.length > MAX_FILE_SIZE_BYTES || (fileSize && fileSize > MAX_FILE_SIZE_BYTES)) {
+      return { success: false, error: 'File size exceeds maximum allowed limit of 15MB.' };
+    }
+
+    // Security Check 2: Block Dangerous Executable File Extensions
+    const extMatch = fileName.match(/\.([a-zA-Z0-9]+)$/);
+    const fileExt = extMatch ? extMatch[1].toLowerCase() : '';
+    const BANNED_EXTENSIONS = [
+      'exe', 'dll', 'bat', 'cmd', 'sh', 'php', 'js', 'vbs',
+      'ps1', 'html', 'htm', 'jar', 'asp', 'aspx', 'cgi', 'py', 'pl'
+    ];
+
+    if (BANNED_EXTENSIONS.includes(fileExt)) {
+      return { success: false, error: `Executable or script files (.${fileExt}) are blocked for system security.` };
     }
 
     const cleanFileName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
@@ -409,18 +434,47 @@ export async function sendLeadToVendors(leadId: string, vendorIds: string[]) {
     // Ensure fresh RFQ PDF is generated and synced to Supabase Storage
     const rfqPdfRes = await ensureLeadRfqPdfInSupabase(leadId);
     const rfqPdfBuffer = rfqPdfRes.success ? rfqPdfRes.buffer : null;
-    const rfqPdfPublicUrl = rfqPdfRes.success ? rfqPdfRes.publicUrl : null;
-    const rfqFileName = rfqPdfRes.success ? rfqPdfRes.fileName : `RFQ_${lead.lead_number}.pdf`;
+    const rfqFileName = (rfqPdfRes.success && rfqPdfRes.fileName) ? rfqPdfRes.fileName : `RFQ_${lead.lead_name || lead.lead_number}.pdf`;
 
-    const attachmentLinks = (lead.lead_attachments || [])
+    // Fetch system settings for company branding & SMTP configuration
+    const settingsRes = await getSystemSettings();
+    const settings = settingsRes.settings;
+
+    const poReference = lead.lead_name?.trim() || lead.lead_number || 'N/A';
+    const createdDate = lead.created_at
+      ? new Date(lead.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+      : new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+    const categoryName = lead.categories?.name || 'General Procurement';
+    const companyName = settings?.company_name || 'TECHNOSPHERE BUSINESS SOLUTIONS';
+    const companyAddress = settings?.office_address || (settings as any)?.company_address || '123 Enterprise Park, Tech Hub, Bangalore 560001';
+    const companyEmail = settings?.official_email || 'sales@technosphere.in';
+    const companyPhone = settings?.phone_number || (settings as any)?.official_phone || '+91 98765 43210';
+
+    const lineItems = parseLineItemsFromLead(lead);
+    const itemsFormattedEmail = lineItems
+      .map((item, idx) => {
+        const qty = Number(item.quantity) || 1;
+        const title = cleanProductTitle(item.product_item) || 'Item Requirement';
+        let spec = item.specifications?.trim() || '';
+        if (!spec && lineItems.length === 1 && lead.specifications) {
+          spec = cleanSpecifications(lead.specifications);
+        }
+        let line = `#${idx + 1}. ${title}\n   Quantity: ${qty} unit${qty > 1 ? 's' : ''}`;
+        if (spec) {
+          line += `\n   Technical Specifications:\n   ${spec.split('\n').join('\n   ')}`;
+        }
+        return line;
+      })
+      .join('\n\n');
+
+    const generalRemarks = cleanSpecifications(lead.remarks);
+
+    const otherAttachmentLinks = (lead.lead_attachments || [])
+      .filter((att: any) => !att.file_name?.startsWith('RFQ_'))
       .map((att: any) => `- ${att.file_name}: ${supabaseUrl}/storage/v1/object/public/lead-attachments/${att.file_path}`)
       .join('\n');
 
-    const emailSubject = `Quotation Request: ${lead.lead_number} - ${cleanProductTitle(lead.product_item)} (${lead.lead_name})`;
-
-    // Fetch system settings for SMTP configuration
-    const settingsRes = await getSystemSettings();
-    const settings = settingsRes.settings;
+    const emailSubject = `Quotation Request: ${poReference} - ${cleanProductTitle(lead.product_item)}`;
 
     let transporter: nodemailer.Transporter | null = null;
     if (settings?.smtp_host?.trim() && settings?.smtp_user?.trim()) {
@@ -443,7 +497,7 @@ export async function sendLeadToVendors(leadId: string, vendorIds: string[]) {
     let failedCount = 0;
     const errors: string[] = [];
 
-    // Construct Mail Attachments array
+    // Construct Mail Attachments array (Direct file attachment, NO URL in email body)
     const mailAttachments: any[] = [];
     if (rfqPdfBuffer) {
       mailAttachments.push({
@@ -454,48 +508,48 @@ export async function sendLeadToVendors(leadId: string, vendorIds: string[]) {
     }
 
     for (const vendor of vendors) {
-      const emailBody = `
-Dear ${vendor.contact_person},
+      const emailBody = `Dear ${vendor.contact_person || vendor.company_name},
 
 We request your official quotation for the following requirement:
 
----------------------------------------------------------
-LEAD & CLIENT REFERENCE
----------------------------------------------------------
-Lead ID: ${lead.lead_number}
-Client / PO Reference: ${lead.lead_name}
-Category: ${lead.categories?.name || 'General'}
-Required Delivery Timeline / Due Date: ${lead.due_date || 'ASAP'}
-Target GST Rate: ${lead.gst_rate || 18}%
+=========================================================
+REQUEST FOR QUOTATION
+=========================================================
+Date Issued: ${createdDate}
+PO Reference No: ${poReference}
+Category: ${categoryName}
 
----------------------------------------------------------
-ITEMIZED REQUIREMENTS & TECHNICAL SPECIFICATIONS
----------------------------------------------------------
-${formatReadableSpecifications(lead)}
+ISSUING PROCUREMENT OFFICE:
+${companyName}
+${companyAddress}
+Email: ${companyEmail} | Phone: ${companyPhone}
 
----------------------------------------------------------
-COMMERCIAL TERMS REQUESTED
----------------------------------------------------------
-- Unit Price (INR)
-- GST (${lead.gst_rate || 18}%)
-- Delivery Terms: ${lead.delivery_terms || 'Standard shipping'}
-- Warranty Required: ${lead.warranty || '1 Year Standard Warranty'}
-- Stock Availability / Lead Time
+=========================================================
+1. ITEM REQUIREMENTS & SPECIFICATIONS SCHEDULE
+=========================================================
+${itemsFormattedEmail}
 
----------------------------------------------------------
-REMARKS & ATTACHMENTS
----------------------------------------------------------
-${lead.remarks || 'None'}
+${generalRemarks ? `=========================================================\nGENERAL REMARKS & TERMS\n=========================================================\n${generalRemarks}\n\n` : ''}=========================================================
+QUOTATION SUBMISSION GUIDELINES
+=========================================================
+1. Please submit net unit pricing.
+2. Indicate stock availability and dispatch timeline.
+3. Quotations should remain valid for a minimum of 15 days from submission.
 
-${rfqPdfPublicUrl ? `Official RFQ PDF Document: ${rfqPdfPublicUrl}` : ''}
-${attachmentLinks ? `Other Attached Files:\n${attachmentLinks}` : ''}
-
-Please find attached the official Request for Quotation (RFQ) PDF document for your records. Submit your quotation with best pricing and lead time at your earliest convenience.
+${otherAttachmentLinks ? `Other Attached Files:\n${otherAttachmentLinks}\n\n` : ''}Please find attached the official Request for Quotation (RFQ) PDF document for your records. Submit your quotation with best pricing and lead time at your earliest convenience.
 
 Best regards,
 ${fromName}
-${settings?.company_name || 'TechnoSphere Business Solutions'}
+${companyName}
 `;
+
+      const emailHtml = generateRfqEmailHtml({
+        lead,
+        vendor,
+        settings,
+        supabaseUrl,
+        rfqFileName,
+      });
 
       let mailStatus: 'sent' | 'failed' = 'sent';
       let mailErrorMsg: string | null = null;
@@ -504,9 +558,10 @@ ${settings?.company_name || 'TechnoSphere Business Solutions'}
         try {
           await transporter.sendMail({
             from: `"${fromName}" <${fromAddress}>`,
-            to: vendor.email,
+            to: vendor.email || '',
             subject: emailSubject,
             text: emailBody,
+            html: emailHtml,
             attachments: mailAttachments,
           });
           successCount++;
@@ -598,6 +653,38 @@ export async function prepareWhatsAppMessage(leadId: string, vendorId: string) {
     const rfqPdfRes = await ensureLeadRfqPdfInSupabase(leadId);
     const rfqPdfPublicUrl = rfqPdfRes.success ? rfqPdfRes.publicUrl : null;
 
+    const poReference = lead.lead_name?.trim() || lead.lead_number || 'N/A';
+    
+    // Format date as DD-MMM-YYYY (e.g. 31-JUL-2026)
+    const d = lead.created_at ? new Date(lead.created_at) : new Date();
+    const day = String(d.getDate()).padStart(2, '0');
+    const monthNames = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+    const month = monthNames[d.getMonth()];
+    const year = d.getFullYear();
+    const formattedDate = `${day}-${month}-${year}`;
+
+    const categoryName = (lead.categories?.name || 'GENERAL').toUpperCase();
+
+    const lineItems = parseLineItemsFromLead(lead);
+    const itemsFormattedWhatsApp = lineItems
+      .map((item, idx) => {
+        const qty = Number(item.quantity) || 1;
+        const title = cleanProductTitle(item.product_item) || 'Item Requirement';
+        let spec = item.specifications?.trim() || '';
+        if (!spec && lineItems.length === 1 && lead.specifications) {
+          spec = cleanSpecifications(lead.specifications);
+        }
+        const qtyLabel = `${qty} No${qty > 1 ? 's' : ''}`;
+        let line = `${idx + 1}. ${title} –  ${qtyLabel}`;
+        if (spec) {
+          line += `\n${spec}`;
+        }
+        return line;
+      })
+      .join('\n\n');
+
+    const generalRemarks = cleanSpecifications(lead.remarks);
+
     // Fetch existing lead attachments for document links
     const { data: attachments } = await supabase
       .from('lead_attachments')
@@ -606,35 +693,24 @@ export async function prepareWhatsAppMessage(leadId: string, vendorId: string) {
 
     const documentLinks: string[] = [];
     if (rfqPdfPublicUrl) {
-      documentLinks.push(`📄 *Official RFQ PDF Document:* ${rfqPdfPublicUrl}`);
+      documentLinks.push(`RFQ PDF: ${rfqPdfPublicUrl}`);
     }
 
     if (attachments && attachments.length > 0) {
       attachments.forEach((att: any) => {
         if (!att.file_name.startsWith('RFQ_')) {
-          documentLinks.push(`📎 *Attachment (${att.file_name}):* ${supabaseUrl}/storage/v1/object/public/lead-attachments/${att.file_path}`);
+          documentLinks.push(`Attachment (${att.file_name}): ${supabaseUrl}/storage/v1/object/public/lead-attachments/${att.file_path}`);
         }
       });
     }
 
-    const docsText = documentLinks.length > 0
-      ? `\n\n*Attached Documents & Specifications:*\n${documentLinks.join('\n')}`
-      : '';
+    const headerLine = `RFQ | ${formattedDate} | ${categoryName} | ${poReference.toUpperCase()}`;
 
-    const messageText = `*QUOTATION REQUEST - TechnoSphere*
-📌 *Lead ID:* ${lead.lead_number}
-🏢 *Client Ref:* ${lead.lead_name}
-📅 *Due Date:* ${lead.due_date || 'ASAP'}
+    const messageText = `${headerLine}
 
-*Itemized Requirements & Specifications:*
-${formatReadableSpecifications(lead)}
+${itemsFormattedWhatsApp}
 
-*Commercial Terms Requested:*
-- Unit Price & GST (${lead.gst_rate || 18}%)
-- Delivery Terms: ${lead.delivery_terms || 'Standard shipping'}
-- Warranty: ${lead.warranty || '1 Year Standard Warranty'}${docsText}
-
-Please review the attached RFQ document link and send your best price and estimated delivery timeline. Thank you!`;
+${generalRemarks ? `Remarks: ${generalRemarks}\n\n` : ''}${documentLinks.length > 0 ? documentLinks.join('\n') : ''}`.trim();
 
     const cleanPhone = vendor.whatsapp_number.replace(/[^0-9+]/g, '').replace(/^\+/, '');
     const webWhatsAppUrl = `https://web.whatsapp.com/send?phone=${cleanPhone}&text=${encodeURIComponent(messageText)}`;
@@ -645,7 +721,7 @@ Please review the attached RFQ document link and send your best price and estima
       vendor_id: vendorId,
       channel: 'whatsapp',
       recipient: vendor.whatsapp_number,
-      subject: `WhatsApp Quotation Request (${lead.lead_number})`,
+      subject: `WhatsApp Quotation Request (${poReference})`,
       content: messageText,
       status: 'prepared',
     });

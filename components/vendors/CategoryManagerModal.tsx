@@ -35,14 +35,24 @@ export function CategoryManagerModal({
 
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim()) return;
+    const cleanName = name.trim();
+    if (!cleanName) return;
+
+    const isDuplicate = categories.some(
+      (c) => c.name?.trim().toLowerCase() === cleanName.toLowerCase()
+    );
+
+    if (isDuplicate) {
+      toast.error(`Category "${cleanName}" already exists. Duplicate category names are not allowed.`);
+      return;
+    }
 
     setLoading(true);
-    const res = await createCategory({ name, description });
+    const res = await createCategory({ name: cleanName, description });
     setLoading(false);
 
     if (res.success) {
-      toast.success(`Category "${name}" added successfully!`);
+      toast.success(`Category "${cleanName}" added successfully!`);
       setName('');
       setDescription('');
       onSuccess();
