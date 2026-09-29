@@ -30,6 +30,15 @@ import {
   FileCheck,
   ListOrdered,
   Plus,
+  RotateCcw,
+  SquareX,
+  Trophy,
+  Award,
+  Lock,
+  CheckCircle2,
+  IndianRupee,
+  CreditCard,
+  UserCheck,
 } from 'lucide-react';
 import {
   assignVendorsToLead,
@@ -39,6 +48,7 @@ import {
   deleteLeadAttachment,
   updateLead,
   deleteLead,
+  closeAndAwardRfq,
 } from '@/actions/leads';
 import { formatDate, formatCurrency, formatFileSize, fileToBase64, extractPrNumber, formatPrReference } from '@/lib/utils';
 import {
@@ -49,6 +59,9 @@ import {
   formatLineItemsSummaryText,
   formatLineItemsToPayload,
   LeadLineItem,
+  EndUserDetails,
+  formatEndUserDetailsToComment,
+  parseEndUserDetailsFromLead,
 } from '@/lib/leadUtils';
 import { toast } from 'sonner';
 
@@ -60,7 +73,7 @@ interface LeadDetailsViewProps {
 
 export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsViewProps) {
   const router = useRouter();
-  const [activeTab, setActiveTab] = useState<'overview' | 'step3' | 'step4'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'step3' | 'step4' | 'step5'>('overview');
   
   // Read-only by default state for Lead details
   const [isEditing, setIsEditing] = useState(false);
@@ -69,11 +82,23 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
   const [deleteLoading, setDeleteLoading] = useState(false);
 
   // Form state for Lead Editing
+  const initialEndUser = parseEndUserDetailsFromLead(lead);
+  const [showEndUserDetails, setShowEndUserDetails] = useState(!!initialEndUser);
+  const [endUserFormData, setEndUserFormData] = useState<EndUserDetails>({
+    company_name: initialEndUser?.company_name || '',
+    address: initialEndUser?.address || '',
+    contact_number: initialEndUser?.contact_number || '',
+    email: initialEndUser?.email || '',
+    website: initialEndUser?.website || '',
+    phone_number: initialEndUser?.phone_number || '',
+  });
+
   const [editFormData, setEditFormData] = useState({
     customer_name: lead.customer_name || '',
     lead_name: extractPrNumber(lead.lead_name),
     category_id: lead.category_id || '',
     status: lead.status || 'draft',
+    expected_credit: lead.expected_credit || '',
     remarks: cleanSpecifications(lead.remarks) || cleanSpecifications(lead.specifications),
   });
 
@@ -86,6 +111,7 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
   const [vendorSearch, setVendorSearch] = useState<string>('');
   const initialSelectedVendorIds = (lead.lead_vendors || []).map((lv: any) => lv.vendor_id);
   const [selectedVendorIds, setSelectedVendorIds] = useState<string[]>(initialSelectedVendorIds);
+  const [lastSelectedVendorIds, setLastSelectedVendorIds] = useState<string[] | null>(null);
 
   // Auto-check vendors for lead's category if none previously selected
   useEffect(() => {
@@ -105,6 +131,17 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
 
   // Template preview state
   const [templateCustomRemarks, setTemplateCustomRemarks] = useState(lead.remarks || '');
+
+  // Step 5 RFQ Closure & Winner Selection state
+  const [selectedWinnerVendorId, setSelectedWinnerVendorId] = useState<string>(lead.winning_vendor_id || '');
+  const [winningAmount, setWinningAmount] = useState<string>(lead.winning_amount ? String(lead.winning_amount) : '');
+  const [closureNotes, setClosureNotes] = useState<string>(lead.closure_notes || '');
+  const [closureStatus, setClosureStatus] = useState<'completed' | 'cancelled'>(
+    lead.status === 'cancelled' ? 'cancelled' : 'completed'
+  );
+  const [closeLoading, setCloseLoading] = useState<boolean>(false);
+  const [showOverrideModal, setShowOverrideModal] = useState<boolean>(false);
+  const [pendingWinnerVendor, setPendingWinnerVendor] = useState<any | null>(null);
 
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'http://127.0.0.1:54321';
 
@@ -147,6 +184,123 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
     const activeVendorIds = catActiveVendors.map((v) => v.id);
     setSelectedVendorIds((prev) => Array.from(new Set([...prev, ...activeVendorIds])));
     toast.success(`Selected ${activeVendorIds.length} active vendor(s)`);
+  };
+
+  const handleUncheckAllCategoryVendors = () => {
+    if (selectedVendorIds.length === 0) {
+      toast.info('No vendors are currently selected.');
+      return;
+    }
+    const previous = [...selectedVendorIds];
+    setLastSelectedVendorIds(previous);
+    setSelectedVendorIds([]);
+    toast.info(`Unchecked all ${previous.length} vendor(s)`, {
+      action: {
+        label: 'Undo',
+        onClick: () => {
+          setSelectedVendorIds(previous);
+          setLastSelectedVendorIds(null);
+          toast.success(`Restored ${previous.length} vendor selection(s)`);
+        },
+      },
+    });
+  };
+
+  const handleUndoUncheck = () => {
+    if (!lastSelectedVendorIds || lastSelectedVendorIds.length === 0) {
+      toast.info('Nothing to undo.');
+      return;
+    }
+    const restored = [...lastSelectedVendorIds];
+    setSelectedVendorIds(restored);
+    setLastSelectedVendorIds(null);
+    toast.success(`Restored ${restored.length} vendor selection(s)`);
+  };
+
+  const winningVendor =
+    lead.winning_vendor ||
+    (lead.winning_vendor_id ? allVendors.find((v) => v.id === lead.winning_vendor_id) : null) ||
+    (lead.winning_vendor_id && lead.lead_vendors
+      ? lead.lead_vendors.map((lv: any) => lv.vendors).find((v: any) => v && v.id === lead.winning_vendor_id)
+      : null) ||
+    (lead.winning_vendor_id
+      ? { id: lead.winning_vendor_id, company_name: 'Awarded Vendor', contact_person: 'N/A', email: 'N/A', whatsapp_number: 'N/A' }
+      : null);
+  const assignedVendorsList = (lead.lead_vendors || [])
+    .map((lv: any) => lv.vendors || allVendors.find((v) => v.id === lv.vendor_id))
+    .filter(Boolean);
+
+  const isClosedOrAwarded = lead.status === 'completed' || !!lead.winning_vendor_id;
+
+  const handleSelectWinnerClick = (vendor: any) => {
+    if (isClosedOrAwarded && lead.winning_vendor_id !== vendor.id) {
+      setPendingWinnerVendor(vendor);
+      setShowOverrideModal(true);
+    } else {
+      setSelectedWinnerVendorId(vendor.id);
+      toast.success(`Selected ${vendor.company_name} as winner!`);
+    }
+  };
+
+  const handleConfirmOverride = async () => {
+    if (!pendingWinnerVendor) return;
+    const targetVendor = pendingWinnerVendor;
+    setShowOverrideModal(false);
+    setSelectedWinnerVendorId(targetVendor.id);
+
+    setCloseLoading(true);
+    const res = await closeAndAwardRfq({
+      leadId: lead.id,
+      winningVendorId: targetVendor.id,
+      winningAmount: winningAmount ? Number(winningAmount) : null,
+      closureNotes: closureNotes,
+      status: 'completed',
+    });
+    setCloseLoading(false);
+
+    if (res.success) {
+      toast.success(`Override applied! Updated winning vendor to ${targetVendor.company_name}`);
+      setPendingWinnerVendor(null);
+      router.refresh();
+    } else {
+      toast.error(res.error || 'Failed to override winner');
+    }
+  };
+
+  const handleCloseAndAward = async () => {
+    if (
+      isClosedOrAwarded &&
+      selectedWinnerVendorId &&
+      selectedWinnerVendorId !== lead.winning_vendor_id
+    ) {
+      const vendorObj = allVendors.find((v) => v.id === selectedWinnerVendorId);
+      setPendingWinnerVendor(vendorObj || { id: selectedWinnerVendorId, company_name: 'Selected Vendor' });
+      setShowOverrideModal(true);
+      return;
+    }
+
+    setCloseLoading(true);
+
+    const res = await closeAndAwardRfq({
+      leadId: lead.id,
+      winningVendorId: selectedWinnerVendorId || null,
+      winningAmount: winningAmount ? Number(winningAmount) : null,
+      closureNotes: closureNotes,
+      status: closureStatus,
+    });
+
+    setCloseLoading(false);
+
+    if (res.success) {
+      toast.success(
+        closureStatus === 'completed'
+          ? 'RFQ successfully marked as closed & awarded!'
+          : 'RFQ marked as cancelled.'
+      );
+      router.refresh();
+    } else {
+      toast.error(res.error || 'Failed to update RFQ closure status');
+    }
   };
 
   const handleVendorToggle = (vendor: any) => {
@@ -290,7 +444,11 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
 
     setSaveLoading(true);
 
-    const payloadFields = formatLineItemsToPayload(lineItems, editFormData.remarks);
+    const endUserComment = showEndUserDetails ? formatEndUserDetailsToComment(endUserFormData) : '';
+    const cleanRemarksText = cleanSpecifications(editFormData.remarks);
+    const finalRemarks = endUserComment ? `${cleanRemarksText}\n${endUserComment}`.trim() : cleanRemarksText;
+
+    const payloadFields = formatLineItemsToPayload(lineItems, finalRemarks);
 
     const res = await updateLead(lead.id, {
       customer_name: editFormData.customer_name.trim(),
@@ -301,7 +459,8 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
       specifications: payloadFields.specifications,
       category_id: editFormData.category_id || undefined,
       status: editFormData.status as any,
-      remarks: editFormData.remarks,
+      expected_credit: editFormData.expected_credit,
+      remarks: finalRemarks,
     });
 
     setSaveLoading(false);
@@ -316,11 +475,22 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
   };
 
   const handleCancelEdit = () => {
+    const initialEndUser = parseEndUserDetailsFromLead(lead);
+    setShowEndUserDetails(!!initialEndUser);
+    setEndUserFormData({
+      company_name: initialEndUser?.company_name || '',
+      address: initialEndUser?.address || '',
+      contact_number: initialEndUser?.contact_number || '',
+      email: initialEndUser?.email || '',
+      website: initialEndUser?.website || '',
+      phone_number: initialEndUser?.phone_number || '',
+    });
     setEditFormData({
       customer_name: lead.customer_name || '',
       lead_name: extractPrNumber(lead.lead_name),
       category_id: lead.category_id || '',
       status: lead.status || 'draft',
+      expected_credit: lead.expected_credit || '',
       remarks: cleanSpecifications(lead.remarks) || cleanSpecifications(lead.specifications),
     });
     setLineItems(parseLineItemsFromLead(lead));
@@ -357,19 +527,26 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
               <span className="font-mono text-indigo-700 dark:text-indigo-400 font-extrabold text-xs bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-500/30 px-2.5 py-1 rounded-md">
                 {lead.lead_number}
               </span>
-              <span
-                className={`px-3 py-1 rounded-full text-xs font-extrabold capitalize border ${
-                  lead.status === 'sent'
-                    ? 'bg-indigo-50 dark:bg-indigo-500/15 text-indigo-800 dark:text-indigo-300 border-indigo-200 dark:border-indigo-500/30'
-                    : lead.status === 'ready_to_send'
-                    ? 'bg-amber-50 dark:bg-amber-500/15 text-amber-800 dark:text-amber-300 border-amber-200 dark:border-amber-500/30'
-                    : lead.status === 'quoted' || lead.status === 'completed'
-                    ? 'bg-emerald-50 dark:bg-emerald-500/15 text-emerald-800 dark:text-emerald-300 border-emerald-200 dark:border-emerald-500/30'
-                    : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-400 border-slate-200 dark:border-slate-700'
-                }`}
-              >
-                Status: {lead.status.replace(/_/g, ' ')}
-              </span>
+              {lead.winning_vendor_id || lead.status === 'completed' ? (
+                <span className="px-3 py-1 rounded-full bg-gradient-to-r from-amber-100 to-amber-200 dark:from-amber-950 dark:to-amber-900/80 text-amber-900 dark:text-amber-300 text-xs font-black border border-amber-300 dark:border-amber-700 flex items-center space-x-1.5 shadow-xs">
+                  <Trophy className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                  <span>Winner: {winningVendor?.company_name || 'Awarded'}</span>
+                </span>
+              ) : (
+                <span
+                  className={`px-3 py-1 rounded-full text-xs font-extrabold capitalize border ${
+                    lead.status === 'sent'
+                      ? 'bg-indigo-50 dark:bg-indigo-500/15 text-indigo-800 dark:text-indigo-300 border-indigo-200 dark:border-indigo-500/30'
+                      : lead.status === 'ready_to_send'
+                      ? 'bg-amber-50 dark:bg-amber-500/15 text-amber-800 dark:text-amber-300 border-amber-200 dark:border-amber-500/30'
+                      : lead.status === 'quoted'
+                      ? 'bg-emerald-50 dark:bg-emerald-500/15 text-emerald-800 dark:text-emerald-300 border-emerald-200 dark:border-emerald-500/30'
+                      : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-400 border-slate-200 dark:border-slate-700'
+                  }`}
+                >
+                  Status: {lead.status.replace(/_/g, ' ')}
+                </span>
+              )}
 
               {isEditing ? (
                 <span className="px-2.5 py-0.5 rounded-full bg-amber-100 dark:bg-amber-950/80 text-amber-900 dark:text-amber-300 text-[11px] font-black border border-amber-300 dark:border-amber-700 animate-pulse">
@@ -513,12 +690,70 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
             </span>
             <span>Step 4 — Prepare & Send RFQ</span>
           </button>
+
+          <button
+            onClick={() => setActiveTab('step5')}
+            className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center space-x-2 border transition-all whitespace-nowrap ${
+              activeTab === 'step5'
+                ? 'bg-amber-50 dark:bg-amber-600/20 text-amber-800 dark:text-amber-300 border-amber-300 dark:border-amber-500/50 shadow-sm'
+                : 'bg-slate-50 dark:bg-slate-900/50 text-slate-700 dark:text-slate-400 border-slate-200 dark:border-slate-800 hover:text-slate-900 dark:hover:text-slate-200'
+            }`}
+          >
+            <span className="w-5 h-5 rounded-full bg-amber-500 text-white dark:bg-amber-600/50 dark:text-amber-100 text-[10px] font-black flex items-center justify-center">
+              5
+            </span>
+            <span>Step 5 — Close RFQ & Select Winner</span>
+          </button>
         </div>
       </div>
 
       {/* TAB 1: LEAD SPECIFICATIONS & ATTACHMENTS (DEFAULT READ ONLY WITH INLINE EDIT) */}
       {activeTab === 'overview' && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {(winningVendor || lead.winning_vendor_id || lead.status === 'completed') && (
+            <div className="lg:col-span-3 p-5 bg-gradient-to-r from-amber-50 via-emerald-50 to-indigo-50 dark:from-amber-950/40 dark:via-emerald-950/40 dark:to-indigo-950/40 border-2 border-amber-300/80 dark:border-amber-600/50 rounded-2xl shadow-sm flex items-center justify-between flex-wrap gap-4">
+              <div className="flex items-center space-x-3">
+                <div className="p-3 bg-amber-500 text-white rounded-xl shadow-xs">
+                  <Trophy className="w-6 h-6" />
+                </div>
+                <div>
+                  <div className="text-xs font-black uppercase tracking-wider text-amber-900 dark:text-amber-300">
+                    RFQ Closed & Awarded Winner
+                  </div>
+                  <div className="text-base font-black text-slate-900 dark:text-slate-100 mt-0.5">
+                    {winningVendor?.company_name || 'Awarded Vendor'}{' '}
+                    {winningVendor?.contact_person && (
+                      <span className="text-xs font-semibold text-slate-600 dark:text-slate-400">
+                        ({winningVendor.contact_person})
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center space-x-4">
+                {lead.winning_amount && (
+                  <div className="text-right">
+                    <div className="text-[10px] font-extrabold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                      Winning Amount
+                    </div>
+                    <div className="text-lg font-black text-emerald-700 dark:text-emerald-400">
+                      ₹{Number(lead.winning_amount).toLocaleString('en-IN')}
+                    </div>
+                  </div>
+                )}
+
+                <button
+                  onClick={() => setActiveTab('step5')}
+                  className="px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold transition-all shadow-xs flex items-center space-x-1"
+                >
+                  <Trophy className="w-3.5 h-3.5" />
+                  <span>View Closure Details</span>
+                </button>
+              </div>
+            </div>
+          )}
+
           <div className="lg:col-span-2 bg-white dark:bg-[#111827] border border-slate-200/90 dark:border-slate-800/80 rounded-2xl p-6 space-y-6 shadow-sm dark:shadow-xl">
             <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-4">
               <div>
@@ -633,6 +868,74 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
                   );
                 })()}
 
+                {/* Read-Only End User Details if available */}
+                {(() => {
+                  const endUser = parseEndUserDetailsFromLead(lead);
+                  if (!endUser) return null;
+                  return (
+                    <div className="bg-slate-50/80 dark:bg-slate-900/60 p-4 rounded-xl border border-slate-200 dark:border-slate-800 space-y-2.5">
+                      <div className="flex items-center space-x-2 border-b border-slate-200/80 dark:border-slate-800 pb-2">
+                        <UserCheck className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                        <span className="text-xs font-extrabold uppercase tracking-wider text-slate-800 dark:text-slate-200">
+                          End User Information
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 text-xs">
+                        {endUser.company_name && (
+                          <div>
+                            <span className="text-[11px] text-slate-500 dark:text-slate-400 font-semibold block">Company Name</span>
+                            <span className="font-bold text-slate-900 dark:text-slate-100">{endUser.company_name}</span>
+                          </div>
+                        )}
+                        {endUser.contact_number && (
+                          <div>
+                            <span className="text-[11px] text-slate-500 dark:text-slate-400 font-semibold block">Contact Number</span>
+                            <span className="font-semibold text-slate-800 dark:text-slate-200">{endUser.contact_number}</span>
+                          </div>
+                        )}
+                        {endUser.phone_number && (
+                          <div>
+                            <span className="text-[11px] text-slate-500 dark:text-slate-400 font-semibold block">Phone Number</span>
+                            <span className="font-semibold text-slate-800 dark:text-slate-200">{endUser.phone_number}</span>
+                          </div>
+                        )}
+                        {endUser.email && (
+                          <div>
+                            <span className="text-[11px] text-slate-500 dark:text-slate-400 font-semibold block">Email ID</span>
+                            <span className="font-semibold text-slate-800 dark:text-slate-200">{endUser.email}</span>
+                          </div>
+                        )}
+                        {endUser.website && (
+                          <div>
+                            <span className="text-[11px] text-slate-500 dark:text-slate-400 font-semibold block">Website</span>
+                            <a href={endUser.website.startsWith('http') ? endUser.website : `https://${endUser.website}`} target="_blank" rel="noopener noreferrer" className="font-semibold text-indigo-600 dark:text-indigo-400 hover:underline">
+                              {endUser.website}
+                            </a>
+                          </div>
+                        )}
+                        {endUser.address && (
+                          <div className="sm:col-span-2 md:col-span-3">
+                            <span className="text-[11px] text-slate-500 dark:text-slate-400 font-semibold block">Address</span>
+                            <span className="font-medium text-slate-800 dark:text-slate-200 leading-relaxed">{endUser.address}</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {lead.expected_credit && (
+                  <div>
+                    <span className="text-slate-700 dark:text-slate-400 text-xs font-bold block mb-1.5">
+                      Expected Credit Terms
+                    </span>
+                    <div className="bg-emerald-50/70 dark:bg-emerald-950/40 p-3 rounded-xl border border-emerald-200 dark:border-emerald-800/60 text-xs text-emerald-900 dark:text-emerald-200 font-bold flex items-center space-x-2">
+                      <CreditCard className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                      <span>{lead.expected_credit}</span>
+                    </div>
+                  </div>
+                )}
+
                 <div>
                   <span className="text-slate-700 dark:text-slate-400 text-xs font-bold block mb-1.5">
                     Remarks & Special Notes
@@ -721,6 +1024,139 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
                         <option value="completed">Completed</option>
                         <option value="cancelled">Cancelled</option>
                       </select>
+                    </div>
+
+                    {/* Checkbox: Add end user details */}
+                    <div className="pt-3 border-t border-slate-200/80 dark:border-slate-800/80 space-y-3">
+                      <label className="inline-flex items-center space-x-2.5 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={showEndUserDetails}
+                          onChange={(e) => {
+                            const checked = e.target.checked;
+                            setShowEndUserDetails(checked);
+                            if (checked && !endUserFormData.company_name && editFormData.customer_name) {
+                              setEndUserFormData((prev) => ({
+                                ...prev,
+                                company_name: editFormData.customer_name,
+                              }));
+                            }
+                          }}
+                          className="w-4 h-4 rounded border-slate-300 dark:border-slate-700 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                        />
+                        <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                          Add end user details
+                        </span>
+                      </label>
+
+                      {/* End User Details Form Grid */}
+                      {showEndUserDetails && (
+                        <div className="p-4 bg-white dark:bg-slate-950 border border-indigo-200 dark:border-indigo-800/60 rounded-xl space-y-3 shadow-2xs animate-fade-in">
+                          <div className="flex items-center justify-between pb-2 border-b border-slate-200 dark:border-slate-800/80">
+                            <div className="flex items-center space-x-2 text-indigo-600 dark:text-indigo-400">
+                              <UserCheck className="w-4 h-4" />
+                              <span className="text-xs font-bold uppercase tracking-wider">
+                                End User Information
+                              </span>
+                            </div>
+                            <span className="text-[10px] font-semibold text-slate-500 dark:text-slate-400">
+                              Prefilled from available data
+                            </span>
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                            <div>
+                              <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                                Company Name
+                              </label>
+                              <input
+                                type="text"
+                                placeholder="End User Company Name"
+                                value={endUserFormData.company_name || ''}
+                                onChange={(e) =>
+                                  setEndUserFormData({ ...endUserFormData, company_name: e.target.value })
+                                }
+                                className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg text-xs font-semibold text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:border-indigo-500"
+                              />
+                            </div>
+
+                            <div>
+                              <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                                Contact Number
+                              </label>
+                              <input
+                                type="text"
+                                placeholder="e.g. +91 98765 43210"
+                                value={endUserFormData.contact_number || ''}
+                                onChange={(e) =>
+                                  setEndUserFormData({ ...endUserFormData, contact_number: e.target.value })
+                                }
+                                className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg text-xs font-medium text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:border-indigo-500"
+                              />
+                            </div>
+
+                            <div>
+                              <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                                Phone Number
+                              </label>
+                              <input
+                                type="text"
+                                placeholder="e.g. 080 1234 5678"
+                                value={endUserFormData.phone_number || ''}
+                                onChange={(e) =>
+                                  setEndUserFormData({ ...endUserFormData, phone_number: e.target.value })
+                                }
+                                className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg text-xs font-medium text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:border-indigo-500"
+                              />
+                            </div>
+
+                            <div>
+                              <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                                Email ID
+                              </label>
+                              <input
+                                type="email"
+                                placeholder="enduser@company.com"
+                                value={endUserFormData.email || ''}
+                                onChange={(e) =>
+                                  setEndUserFormData({ ...endUserFormData, email: e.target.value })
+                                }
+                                className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg text-xs font-medium text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:border-indigo-500"
+                              />
+                            </div>
+
+                            <div>
+                              <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                                Website
+                              </label>
+                              <input
+                                type="text"
+                                placeholder="https://www.endusercompany.com"
+                                value={endUserFormData.website || ''}
+                                onChange={(e) =>
+                                  setEndUserFormData({ ...endUserFormData, website: e.target.value })
+                                }
+                                className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg text-xs font-medium text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:border-indigo-500"
+                              />
+                            </div>
+
+                            <div className="sm:col-span-2 md:col-span-3">
+                              <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                                Address
+                              </label>
+                              <input
+                                type="text"
+                                placeholder="Full End User Address"
+                                value={endUserFormData.address || ''}
+                                onChange={(e) =>
+                                  setEndUserFormData({ ...endUserFormData, address: e.target.value })
+                                }
+                                className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg text-xs font-medium text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:border-indigo-500"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -829,6 +1265,19 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
                     <h4 className="text-xs font-extrabold uppercase tracking-wider text-slate-800 dark:text-slate-200">
                       3. Remarks & Special Notes
                     </h4>
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-700 dark:text-slate-300 font-bold mb-1.5 text-xs">
+                      Expected Credit Terms (Optional)
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. 30 Days Credit, Net 45"
+                      value={editFormData.expected_credit || ''}
+                      onChange={(e) => setEditFormData({ ...editFormData, expected_credit: e.target.value })}
+                      className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-slate-900 dark:text-slate-100 font-medium text-xs focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all mb-3"
+                    />
                   </div>
 
                   <div>
@@ -942,7 +1391,7 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
               </p>
             </div>
 
-            <div className="flex flex-col sm:flex-row items-center gap-2.5">
+            <div className="flex flex-wrap items-center gap-2.5">
               <select
                 value={selectedCategoryFilter}
                 onChange={(e) => handleCategoryFilterChange(e.target.value)}
@@ -959,10 +1408,32 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
               <button
                 type="button"
                 onClick={handleSelectAllCategoryVendors}
-                className="px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold transition-colors whitespace-nowrap"
+                className="px-3 py-2 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 dark:hover:bg-indigo-900 text-indigo-700 dark:text-indigo-300 border border-indigo-200/80 dark:border-indigo-800/60 text-xs font-bold transition-colors whitespace-nowrap flex items-center space-x-1.5"
               >
-                Select All Category Vendors
+                <CheckSquare className="w-3.5 h-3.5" />
+                <span>Select All Category Vendors</span>
               </button>
+
+              <button
+                type="button"
+                onClick={handleUncheckAllCategoryVendors}
+                disabled={selectedVendorIds.length === 0}
+                className="px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-rose-50 dark:hover:bg-rose-950/40 text-slate-700 hover:text-rose-700 dark:text-slate-300 dark:hover:text-rose-300 border border-slate-200 dark:border-slate-700 text-xs font-bold transition-colors whitespace-nowrap disabled:opacity-40 disabled:pointer-events-none flex items-center space-x-1.5"
+              >
+                <SquareX className="w-3.5 h-3.5 text-rose-500" />
+                <span>Uncheck All ({selectedVendorIds.length})</span>
+              </button>
+
+              {lastSelectedVendorIds && lastSelectedVendorIds.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleUndoUncheck}
+                  className="px-3 py-2 rounded-xl bg-amber-50 dark:bg-amber-950/50 hover:bg-amber-100 dark:hover:bg-amber-900 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-700 text-xs font-extrabold transition-all whitespace-nowrap flex items-center space-x-1.5 shadow-sm animate-pulse"
+                >
+                  <RotateCcw className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+                  <span>Undo Uncheck ({lastSelectedVendorIds.length})</span>
+                </button>
+              )}
 
               <input
                 type="text"
@@ -1165,6 +1636,15 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
                 </div>
               </div>
 
+              {lead.expected_credit && (
+                <div>
+                  <span className="text-slate-700 dark:text-slate-400 block font-bold mb-1">EXPECTED CREDIT TERMS:</span>
+                  <div className="bg-emerald-50 dark:bg-emerald-950/40 p-2.5 rounded-xl border border-emerald-200 dark:border-emerald-800/60 font-sans text-xs text-emerald-900 dark:text-emerald-200 font-bold">
+                    {lead.expected_credit}
+                  </div>
+                </div>
+              )}
+
               <div>
                 <span className="text-slate-700 dark:text-slate-400 block font-bold mb-1">REMARKS & SPECIAL NOTES:</span>
                 <textarea
@@ -1276,6 +1756,273 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
                 )}
                 <span>Dispatch Quotation Email to Vendors</span>
               </button>
+
+              {/* Proceed to Step 5 Button */}
+              <div className="pt-3 border-t border-slate-200 dark:border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('step5')}
+                  className="w-full py-3 bg-amber-50 dark:bg-amber-950/60 hover:bg-amber-100 dark:hover:bg-amber-900 border border-amber-300 dark:border-amber-700 text-amber-900 dark:text-amber-200 rounded-xl font-extrabold text-xs flex items-center justify-center space-x-2 transition-all shadow-xs"
+                >
+                  <Trophy className="w-4 h-4 text-amber-600" />
+                  <span>Proceed to Step 5: Close RFQ & Award Winner →</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 4: STEP 5 — CLOSE RFQ & AWARD WINNING VENDOR */}
+      {activeTab === 'step5' && (
+        <div className="space-y-6 animate-fade-in">
+          {/* Step Header Banner */}
+          <div className="bg-white dark:bg-[#111827] border border-slate-200/90 dark:border-slate-800/80 rounded-2xl p-6 space-y-4 shadow-sm dark:shadow-xl">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-slate-200 dark:border-slate-800">
+              <div>
+                <h3 className="text-base font-extrabold text-slate-900 dark:text-slate-100 flex items-center space-x-2">
+                  <Trophy className="w-5 h-5 text-amber-500" />
+                  <span>Step 5 — Close RFQ & Award Winning Vendor</span>
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 font-medium mt-1">
+                  Select the winning vendor for this procurement requirement, record final agreed pricing, and mark the RFQ workflow as completed.
+                </p>
+              </div>
+
+              <div className="flex items-center space-x-2">
+                {lead.status === 'completed' ? (
+                  <span className="px-3 py-1.5 rounded-xl bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700 text-xs font-black flex items-center space-x-1.5 shadow-xs">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                    <span>RFQ CLOSED & AWARDED</span>
+                  </span>
+                ) : (
+                  <span className="px-3 py-1.5 rounded-xl bg-amber-50 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800 text-xs font-extrabold flex items-center space-x-1.5">
+                    <Lock className="w-3.5 h-3.5 text-amber-600" />
+                    <span>Status: {(lead.status || 'draft').toUpperCase()}</span>
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Winning Summary Banner if already closed */}
+            {(winningVendor || lead.winning_vendor_id || lead.status === 'completed') && (
+              <div className="bg-gradient-to-r from-amber-50 via-emerald-50 to-indigo-50 dark:from-amber-950/30 dark:via-emerald-950/30 dark:to-indigo-950/30 border-2 border-amber-300/80 dark:border-amber-600/50 rounded-xl p-5 space-y-3 shadow-md">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div className="flex items-center space-x-2">
+                    <span className="p-2 rounded-lg bg-amber-500 text-white font-black text-sm shadow-sm">
+                      🏆
+                    </span>
+                    <div>
+                      <h4 className="text-xs font-extrabold uppercase tracking-wider text-amber-900 dark:text-amber-300">
+                        Winning Vendor Awarded
+                      </h4>
+                      <div className="text-lg font-black text-slate-900 dark:text-slate-100 mt-0.5">
+                        {winningVendor?.company_name || 'Awarded Vendor'}
+                      </div>
+                    </div>
+                  </div>
+
+                  {lead.winning_amount && (
+                    <div className="text-right">
+                      <div className="text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                        Final Agreed Amount
+                      </div>
+                      <div className="text-xl font-black text-emerald-700 dark:text-emerald-400">
+                        ₹{Number(lead.winning_amount).toLocaleString('en-IN')}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-3 border-t border-slate-200/80 dark:border-slate-800/80 text-xs font-medium">
+                  <div>
+                    <span className="text-slate-500 dark:text-slate-400 block text-[11px] font-bold">Contact Person</span>
+                    <span className="text-slate-900 dark:text-slate-200 font-bold">{winningVendor?.contact_person || 'N/A'}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-500 dark:text-slate-400 block text-[11px] font-bold">Email & Phone</span>
+                    <span className="text-slate-900 dark:text-slate-200 font-bold">
+                      {winningVendor?.email || 'N/A'} {winningVendor?.whatsapp_number ? `• ${winningVendor.whatsapp_number}` : ''}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-slate-500 dark:text-slate-400 block text-[11px] font-bold">Closure Date</span>
+                    <span className="text-slate-900 dark:text-slate-200 font-bold">{lead.closed_at ? formatDate(lead.closed_at) : 'N/A'}</span>
+                  </div>
+                </div>
+
+                {lead.closure_notes && (
+                  <div className="pt-2 border-t border-slate-200/80 dark:border-slate-800/80 text-xs text-slate-700 dark:text-slate-300 font-medium">
+                    <strong className="text-slate-900 dark:text-slate-100">Closure Notes:</strong> {lead.closure_notes}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Main Grid: Vendor Selection Cards & Closure Form */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 pt-2">
+              {/* Left 2 Cols: Interactive Assigned Vendors Cards */}
+              <div className="lg:col-span-2 space-y-4">
+                <h4 className="text-xs font-extrabold uppercase tracking-wider text-slate-800 dark:text-slate-200 flex items-center space-x-2">
+                  <Award className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                  <span>Select Winning Vendor from Assigned Vendors ({assignedVendorsList.length})</span>
+                </h4>
+
+                {assignedVendorsList.length === 0 ? (
+                  <div className="p-6 text-center text-xs font-semibold text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800">
+                    No vendors were assigned to this lead. You can select any active vendor from the dropdown on the right.
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {assignedVendorsList.map((vendor: any) => {
+                      const isSelectedWinner = selectedWinnerVendorId === vendor.id;
+                      const leadVendorObj = (lead.lead_vendors || []).find((lv: any) => lv.vendor_id === vendor.id);
+
+                      return (
+                        <div
+                          key={vendor.id}
+                          className={`p-4 rounded-xl border transition-all space-y-3 relative ${
+                            isSelectedWinner
+                              ? 'bg-amber-50/70 dark:bg-amber-950/40 border-amber-400 dark:border-amber-600 shadow-md ring-2 ring-amber-500/20'
+                              : 'bg-slate-50/60 dark:bg-slate-900/50 border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700'
+                          }`}
+                        >
+                          <div className="flex items-start justify-between">
+                            <div>
+                              <h5 className="font-extrabold text-sm text-slate-900 dark:text-slate-100">
+                                {vendor.company_name}
+                              </h5>
+                              <div className="text-xs text-slate-500 dark:text-slate-400 font-medium mt-0.5">
+                                {vendor.contact_person}
+                              </div>
+                            </div>
+                            {isSelectedWinner && (
+                              <span className="px-2 py-0.5 rounded-md bg-amber-500 text-white font-black text-[10px] uppercase tracking-wider flex items-center space-x-1 shadow-xs">
+                                <span>🏆 Winner</span>
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="space-y-1 text-xs text-slate-600 dark:text-slate-400">
+                            <div>Email: <strong className="text-slate-900 dark:text-slate-200">{vendor.email}</strong></div>
+                            <div>Phone: <strong className="text-slate-900 dark:text-slate-200">{vendor.whatsapp_number}</strong></div>
+                          </div>
+
+                          <div className="flex items-center space-x-2 pt-2 border-t border-slate-200 dark:border-slate-800 text-[10px]">
+                            <span className={`px-2 py-0.5 rounded font-extrabold ${leadVendorObj?.email_sent ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-600'}`}>
+                              {leadVendorObj?.email_sent ? 'Email Sent' : 'Email Pending'}
+                            </span>
+                            <span className={`px-2 py-0.5 rounded font-extrabold ${leadVendorObj?.whatsapp_prepared ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-600'}`}>
+                              {leadVendorObj?.whatsapp_prepared ? 'WA Prepared' : 'WA Pending'}
+                            </span>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => handleSelectWinnerClick(vendor)}
+                            className={`w-full py-2 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center space-x-1.5 ${
+                              isSelectedWinner
+                                ? 'bg-amber-500 text-white shadow-md'
+                                : 'bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-amber-50 dark:hover:bg-amber-950/40 hover:text-amber-700'
+                            }`}
+                          >
+                            <Trophy className="w-3.5 h-3.5" />
+                            <span>{isSelectedWinner ? 'Selected Winner' : 'Mark as Winner'}</span>
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* Right Col: Closure Form Details */}
+              <div className="space-y-4 bg-slate-50 dark:bg-slate-900/60 p-5 rounded-2xl border border-slate-200 dark:border-slate-800">
+                <h4 className="text-xs font-extrabold uppercase tracking-wider text-slate-900 dark:text-slate-100 pb-2 border-b border-slate-200 dark:border-slate-800 flex items-center space-x-2">
+                  <Lock className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                  <span>RFQ Closure Form</span>
+                </h4>
+
+                {/* Select Winner Dropdown */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    Select Winning Vendor
+                  </label>
+                  <select
+                    value={selectedWinnerVendorId}
+                    onChange={(e) => setSelectedWinnerVendorId(e.target.value)}
+                    className="w-full px-3 py-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-bold text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500 cursor-pointer"
+                  >
+                    <option value="">-- No Vendor / Select Winner --</option>
+                    {allVendors.map((v) => (
+                      <option key={v.id} value={v.id}>
+                        {v.company_name} ({v.contact_person})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Final Winning Amount */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    Final Agreed Amount (₹ INR)
+                  </label>
+                  <div className="relative">
+                    <IndianRupee className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+                    <input
+                      type="number"
+                      placeholder="e.g. 150000"
+                      value={winningAmount}
+                      onChange={(e) => setWinningAmount(e.target.value)}
+                      className="w-full pl-9 pr-3 py-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-bold text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+                </div>
+
+                {/* Closure Status */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    Workflow Status
+                  </label>
+                  <select
+                    value={closureStatus}
+                    onChange={(e) => setClosureStatus(e.target.value as any)}
+                    className="w-full px-3 py-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-bold text-emerald-700 dark:text-emerald-400 focus:outline-none focus:border-indigo-500 cursor-pointer"
+                  >
+                    <option value="completed">Completed (Closed & Awarded)</option>
+                    <option value="cancelled">Cancelled (Closed without Award)</option>
+                  </select>
+                </div>
+
+                {/* Closure Notes */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    Closure Notes & Selection Remarks
+                  </label>
+                  <textarea
+                    rows={3}
+                    placeholder="e.g. Vendor provided best pricing and 7-day dispatch timeline..."
+                    value={closureNotes}
+                    onChange={(e) => setClosureNotes(e.target.value)}
+                    className="w-full px-3 py-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-medium text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500 leading-relaxed"
+                  />
+                </div>
+
+                {/* Save Action Button */}
+                <button
+                  type="button"
+                  onClick={handleCloseAndAward}
+                  disabled={closeLoading}
+                  className="w-full py-3 bg-amber-500 hover:bg-amber-600 text-white rounded-xl font-extrabold text-xs shadow-lg shadow-amber-500/30 flex items-center justify-center space-x-2 disabled:opacity-50 transition-all hover:scale-[1.01] active:scale-[0.99]"
+                >
+                  {closeLoading ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Trophy className="w-4 h-4" />
+                  )}
+                  <span>🏆 Save Closure & Award Vendor</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -1321,6 +2068,63 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
                   <Trash2 className="w-4 h-4" />
                 )}
                 <span>Delete RFQ Permanently</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* OVERRIDE WINNING VENDOR CONFIRMATION MODAL */}
+      {showOverrideModal && pendingWinnerVendor && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-fade-in">
+          <div className="bg-white dark:bg-[#111827] border border-amber-300 dark:border-amber-700/80 rounded-2xl p-6 max-w-md w-full shadow-2xl space-y-4">
+            <div className="flex items-center space-x-3 text-amber-600 dark:text-amber-400">
+              <div className="p-3 bg-amber-50 dark:bg-amber-950/60 rounded-xl border border-amber-200 dark:border-amber-800">
+                <Trophy className="w-6 h-6 text-amber-500" />
+              </div>
+              <div>
+                <h3 className="font-extrabold text-slate-900 dark:text-slate-100 text-base">
+                  RFQ is Already Closed & Awarded
+                </h3>
+                <p className="text-xs text-amber-700 dark:text-amber-400 font-bold">
+                  Override Confirmation Required
+                </p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-700 dark:text-slate-300 leading-relaxed font-medium">
+              This RFQ is currently closed with awarded winner{' '}
+              <strong className="text-amber-800 dark:text-amber-300 font-black">
+                {winningVendor?.company_name || 'an existing vendor'}
+              </strong>.
+            </p>
+
+            <p className="text-xs text-slate-700 dark:text-slate-300 leading-relaxed font-medium bg-amber-50 dark:bg-amber-950/40 p-3 rounded-xl border border-amber-200 dark:border-amber-800/60">
+              To replace the current winner with <strong className="text-slate-900 dark:text-slate-100 font-extrabold">{pendingWinnerVendor.company_name}</strong>, click <strong className="text-amber-700 dark:text-amber-300 font-black">Override & Award Winner</strong> below.
+            </p>
+
+            <div className="flex items-center justify-end space-x-3 pt-3 border-t border-slate-200 dark:border-slate-800">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowOverrideModal(false);
+                  setPendingWinnerVendor(null);
+                }}
+                className="px-4 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-extrabold transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmOverride}
+                disabled={closeLoading}
+                className="px-5 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-extrabold flex items-center space-x-2 shadow-md shadow-amber-500/30 disabled:opacity-50 transition-all"
+              >
+                {closeLoading ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Trophy className="w-4 h-4" />
+                )}
+                <span>Override & Award Winner</span>
               </button>
             </div>
           </div>

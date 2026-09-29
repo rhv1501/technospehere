@@ -2,6 +2,7 @@
 
 import { createAdminClient } from '@/lib/supabase/admin';
 import { parseLineItemsFromLead } from '@/lib/leadUtils';
+import { enrichLeadsWithWinningVendor } from '@/actions/leads';
 
 export interface AnalyticsSummary {
   leads: any[];
@@ -76,7 +77,8 @@ export async function getAnalyticsData() {
       `).order('created_at', { ascending: false }).limit(20),
     ]);
 
-    const leads = leadsRes.data || [];
+    const rawLeads = leadsRes.data || [];
+    const leads = await enrichLeadsWithWinningVendor(supabase, rawLeads);
     const vendors = vendorsRes.data || [];
     const categories = categoriesRes.data || [];
     const registrations = registrationsRes.data || [];

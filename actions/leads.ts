@@ -16,8 +16,95 @@ export interface LeadInput {
   specifications?: string;
   category_id?: string;
   unit_price_estimate?: number;
+  expected_credit?: string;
   remarks?: string;
+  winning_vendor_id?: string | null;
+  winning_amount?: number | null;
+  closure_notes?: string | null;
+  closed_at?: string | null;
   status?: 'draft' | 'ready_to_send' | 'sent' | 'quoted' | 'completed' | 'cancelled';
+}
+
+export async function enrichLeadsWithWinningVendor(supabase: any, leads: any[]) {
+  if (!leads || leads.length === 0) return leads;
+
+  // Extract closure metadata from remarks if native columns are empty
+  const parsedLeads = leads.map((lead) => {
+    let updatedLead = { ...lead };
+    const rawText = lead.remarks || lead.specifications || '';
+    if (typeof rawText === 'string' && rawText.includes('[[CLOSURE_DATA:')) {
+      try {
+        const match = rawText.match(/\[\[CLOSURE_DATA:([\s\S]*?)\]\]/);
+        if (match && match[1]) {
+          const closureObj = JSON.parse(match[1]);
+          if (!updatedLead.winning_vendor_id && closureObj.winning_vendor_id) {
+            updatedLead.winning_vendor_id = closureObj.winning_vendor_id;
+          }
+          if (updatedLead.winning_amount == null && closureObj.winning_amount != null) {
+            updatedLead.winning_amount = closureObj.winning_amount;
+          }
+          if (!updatedLead.closure_notes && closureObj.closure_notes) {
+            updatedLead.closure_notes = closureObj.closure_notes;
+          }
+          if (!updatedLead.closed_at && closureObj.closed_at) {
+            updatedLead.closed_at = closureObj.closed_at;
+          }
+        }
+      } catch (err) {
+        console.error('Failed to parse CLOSURE_DATA from remarks:', err);
+      }
+    }
+    return updatedLead;
+  });
+
+  const missingVendorIds = Array.from(
+    new Set(
+      parsedLeads
+        .filter((l) => l.winning_vendor_id && !l.winning_vendor)
+        .map((l) => l.winning_vendor_id)
+    )
+  );
+
+  const vendorMap = new Map<string, any>();
+
+  for (const lead of parsedLeads) {
+    if (lead.lead_vendors && Array.isArray(lead.lead_vendors)) {
+      for (const lv of lead.lead_vendors) {
+        if (lv.vendors && lv.vendors.id) {
+          vendorMap.set(lv.vendors.id, lv.vendors);
+        }
+      }
+    }
+  }
+
+  const fetchIds = missingVendorIds.filter((id) => !vendorMap.has(id));
+
+  if (fetchIds.length > 0) {
+    try {
+      const { data: vendorsData } = await supabase
+        .from('vendors')
+        .select('id, company_name, contact_person, email, whatsapp_number, status')
+        .in('id', fetchIds);
+
+      if (vendorsData) {
+        for (const v of vendorsData) {
+          vendorMap.set(v.id, v);
+        }
+      }
+    } catch (e) {
+      console.error('Error fetching missing winning vendors:', e);
+    }
+  }
+
+  return parsedLeads.map((lead) => {
+    if (!lead.winning_vendor && lead.winning_vendor_id) {
+      return {
+        ...lead,
+        winning_vendor: vendorMap.get(lead.winning_vendor_id) || null,
+      };
+    }
+    return lead;
+  });
 }
 
 export async function getLeads(filters?: { search?: string; status?: string; categoryId?: string }) {
@@ -59,13 +146,15 @@ export async function getLeads(filters?: { search?: string; status?: string; cat
 
     if (filters?.search && filters.search.trim()) {
       const s = `%${filters.search.trim()}%`;
-      query = query.or(`lead_number.ilike.${s},customer_name.ilike.${s},lead_name.ilike.${s},product_item.ilike.${s}`);
+      query = query.or(`lead_number.ilike.${s},customer_name.ilike.${s},lead_name.ilike.${s},product_item.ilike.${s},expected_credit.ilike.${s}`);
     }
 
     const { data, error } = await query;
     if (error) throw error;
 
-    return { success: true, leads: data || [] };
+    const enrichedLeads = await enrichLeadsWithWinningVendor(supabase, data || []);
+
+    return { success: true, leads: enrichedLeads };
   } catch (error: any) {
     console.error('Error fetching leads:', error);
     return { success: false, error: error.message || 'Failed to fetch leads', leads: [] };
@@ -106,7 +195,9 @@ export async function getLeadById(id: string) {
 
     if (error) throw error;
 
-    return { success: true, lead: data };
+    const [enrichedLead] = await enrichLeadsWithWinningVendor(supabase, [data]);
+
+    return { success: true, lead: enrichedLead };
   } catch (error: any) {
     console.error('Error fetching lead details:', error);
     return { success: false, error: error.message || 'Lead not found', lead: null };
@@ -133,6 +224,7 @@ export async function createLead(data: LeadInput) {
         specifications: data.specifications?.trim() || null,
         category_id: data.category_id || null,
         unit_price_estimate: data.unit_price_estimate != null ? Number(data.unit_price_estimate) : null,
+        expected_credit: data.expected_credit?.trim() || null,
         remarks: data.remarks?.trim() || null,
         status: data.status || 'draft',
       })
@@ -181,7 +273,12 @@ export async function updateLead(id: string, data: Partial<LeadInput>) {
     if (data.specifications !== undefined) payload.specifications = data.specifications?.trim() || null;
     if (data.category_id !== undefined) payload.category_id = data.category_id || null;
     if (data.unit_price_estimate !== undefined) payload.unit_price_estimate = data.unit_price_estimate != null ? Number(data.unit_price_estimate) : null;
+    if (data.expected_credit !== undefined) payload.expected_credit = data.expected_credit?.trim() || null;
     if (data.remarks !== undefined) payload.remarks = data.remarks?.trim() || null;
+    if (data.winning_vendor_id !== undefined) payload.winning_vendor_id = data.winning_vendor_id || null;
+    if (data.winning_amount !== undefined) payload.winning_amount = data.winning_amount != null ? Number(data.winning_amount) : null;
+    if (data.closure_notes !== undefined) payload.closure_notes = data.closure_notes?.trim() || null;
+    if (data.closed_at !== undefined) payload.closed_at = data.closed_at || null;
     if (data.status !== undefined) payload.status = data.status;
 
     const { data: updated, error } = await supabase
@@ -200,6 +297,85 @@ export async function updateLead(id: string, data: Partial<LeadInput>) {
   } catch (error: any) {
     console.error('Error updating lead:', error);
     return { success: false, error: error.message || 'Failed to update lead' };
+  }
+}
+
+export async function closeAndAwardRfq(params: {
+  leadId: string;
+  winningVendorId?: string | null;
+  winningAmount?: number | null;
+  closureNotes?: string | null;
+  status?: 'completed' | 'cancelled' | 'draft';
+}) {
+  try {
+    const { leadId, winningVendorId, winningAmount, closureNotes, status } = params;
+    const supabase = createAdminClient();
+
+    const closedAtStr = new Date().toISOString();
+
+    const fullPayload: any = {
+      status: status || 'completed',
+      closed_at: closedAtStr,
+      winning_vendor_id: winningVendorId || null,
+      winning_amount: winningAmount != null ? Number(winningAmount) : null,
+      closure_notes: closureNotes?.trim() || null,
+    };
+
+    // 1. First, attempt native column update
+    let res = await supabase
+      .from('leads')
+      .update(fullPayload)
+      .eq('id', leadId)
+      .select()
+      .single();
+
+    // 2. Fallback: If PostgREST schema cache error indicates missing columns, store CLOSURE_DATA JSON in remarks
+    if (res.error) {
+      console.warn('Native update failed (likely missing schema columns), using fallback remarks payload:', res.error.message);
+
+      const { data: existingLead } = await supabase
+        .from('leads')
+        .select('remarks, specifications')
+        .eq('id', leadId)
+        .single();
+
+      let currentRemarks = existingLead?.remarks || existingLead?.specifications || '';
+      // Strip out any existing CLOSURE_DATA block
+      currentRemarks = currentRemarks.replace(/\[\[CLOSURE_DATA:[\s\S]*?\]\]/g, '').trim();
+
+      const closureDataJson = JSON.stringify({
+        winning_vendor_id: winningVendorId || null,
+        winning_amount: winningAmount != null ? Number(winningAmount) : null,
+        closure_notes: closureNotes?.trim() || null,
+        closed_at: closedAtStr,
+      });
+
+      const updatedRemarks = `${currentRemarks}\n\n[[CLOSURE_DATA:${closureDataJson}]]`.trim();
+
+      res = await supabase
+        .from('leads')
+        .update({
+          status: status || 'completed',
+          remarks: updatedRemarks,
+        })
+        .eq('id', leadId)
+        .select()
+        .single();
+    }
+
+    if (res.error) throw res.error;
+
+    // Enrich lead with winning vendor object before returning
+    const [enriched] = await enrichLeadsWithWinningVendor(supabase, [res.data]);
+
+    revalidatePath(`/dashboard/leads/${leadId}`);
+    revalidatePath('/dashboard/leads');
+    revalidatePath('/dashboard');
+
+    return { success: true, lead: enriched };
+  } catch (error: any) {
+    console.error('Error closing RFQ:', error);
+    return { success: false, error: error.message || 'Failed to close RFQ' };
   }
 }
 
@@ -467,6 +643,7 @@ export async function sendLeadToVendors(leadId: string, vendorIds: string[]) {
       })
       .join('\n\n');
 
+    const expectedCredit = lead.expected_credit?.trim() || '';
     const generalRemarks = cleanSpecifications(lead.remarks);
 
     const otherAttachmentLinks = (lead.lead_attachments || [])
@@ -519,17 +696,17 @@ Date Issued: ${createdDate}
 PO Reference No: ${poReference}
 Category: ${categoryName}
 
-ISSUING PROCUREMENT OFFICE:
+RFQ REQUESTED BY:
 ${companyName}
 ${companyAddress}
 Email: ${companyEmail} | Phone: ${companyPhone}
 
 =========================================================
-1. ITEM REQUIREMENTS & SPECIFICATIONS SCHEDULE
+BILLS OF MATERIAL
 =========================================================
 ${itemsFormattedEmail}
 
-${generalRemarks ? `=========================================================\nGENERAL REMARKS & TERMS\n=========================================================\n${generalRemarks}\n\n` : ''}=========================================================
+${expectedCredit ? `=========================================================\nEXPECTED CREDIT TERMS\n=========================================================\n${expectedCredit}\n\n` : ''}${generalRemarks ? `=========================================================\nGENERAL REMARKS & TERMS\n=========================================================\n${generalRemarks}\n\n` : ''}=========================================================
 QUOTATION SUBMISSION GUIDELINES
 =========================================================
 1. Please submit net unit pricing.
@@ -683,6 +860,7 @@ export async function prepareWhatsAppMessage(leadId: string, vendorId: string) {
       })
       .join('\n\n');
 
+    const expectedCredit = lead.expected_credit?.trim() || '';
     const generalRemarks = cleanSpecifications(lead.remarks);
 
     // Fetch existing lead attachments for document links
@@ -710,7 +888,7 @@ export async function prepareWhatsAppMessage(leadId: string, vendorId: string) {
 
 ${itemsFormattedWhatsApp}
 
-${generalRemarks ? `Remarks: ${generalRemarks}\n\n` : ''}${documentLinks.length > 0 ? documentLinks.join('\n') : ''}`.trim();
+${expectedCredit ? `Expected Credit: ${expectedCredit}\n\n` : ''}${generalRemarks ? `Remarks: ${generalRemarks}\n\n` : ''}${documentLinks.length > 0 ? documentLinks.join('\n') : ''}`.trim();
 
     const cleanPhone = vendor.whatsapp_number.replace(/[^0-9+]/g, '').replace(/^\+/, '');
     const webWhatsAppUrl = `https://web.whatsapp.com/send?phone=${cleanPhone}&text=${encodeURIComponent(messageText)}`;

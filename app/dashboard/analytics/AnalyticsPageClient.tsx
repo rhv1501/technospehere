@@ -18,6 +18,7 @@ import {
   Package,
   Award,
   RefreshCw,
+  Trophy,
 } from 'lucide-react';
 import { cleanProductTitle, parseLineItemsFromLead } from '@/lib/leadUtils';
 import { DateFilterBar } from '@/components/dashboard/DateFilterBar';
@@ -130,7 +131,12 @@ export function AnalyticsPageClient({ analytics }: AnalyticsPageClientProps) {
   const { start, end } = getDateBounds(selectedPreset, customFrom, customTo);
 
   // Filter collections by date bounds
-  const filteredLeads = rawLeads.filter((l) => isWithinDateRange(l.created_at, start, end));
+  const filteredLeads = rawLeads.filter((l) => {
+    if (selectedPreset === 'all') return true;
+    const isCreatedInRange = isWithinDateRange(l.created_at, start, end);
+    const isClosedInRange = l.closed_at ? isWithinDateRange(l.closed_at, start, end) : false;
+    return isCreatedInRange || isClosedInRange;
+  });
   const filteredVendors = selectedPreset === 'all'
     ? rawVendors
     : rawVendors.filter((v) => isWithinDateRange(v.created_at, start, end));
@@ -184,6 +190,14 @@ export function AnalyticsPageClient({ analytics }: AnalyticsPageClientProps) {
   const sentCount = leadsByStatus.sent || 0;
   const quotedCount = leadsByStatus.quoted || 0;
   const completedCount = leadsByStatus.completed || 0;
+  const closedAndAwardedCount = rawLeads.filter((l) => {
+    const isClosed = l.status === 'completed' || !!l.winning_vendor_id;
+    if (!isClosed) return false;
+    if (selectedPreset === 'all') return true;
+    const targetDate = l.closed_at || l.created_at;
+    return isWithinDateRange(targetDate, start, end);
+  }).length;
+  const closedPct = totalLeads > 0 ? Math.round((closedAndAwardedCount / totalLeads) * 100) : 0;
 
   const totalStatusCount = Math.max(totalLeads, 1);
   const draftPct = Math.round((draftCount / totalStatusCount) * 100);
@@ -314,24 +328,24 @@ export function AnalyticsPageClient({ analytics }: AnalyticsPageClientProps) {
 
       {/* KPI Cards Row (4 Columns on Desktop, 2 on Tablet, 1 on Mobile) */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Card 1: Total Unit Volume */}
+        {/* Card 1: Totally Closed RFQs */}
         <div className="bg-white dark:bg-[#111827] border border-slate-200/90 dark:border-slate-800/80 p-5 rounded-2xl shadow-sm dark:shadow-xl space-y-3 relative overflow-hidden group">
           <div className="flex items-center justify-between">
             <span className="text-[11px] sm:text-xs font-extrabold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
-              Total Unit Volume
+              Totally Closed RFQs
             </span>
-            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-emerald-50 dark:bg-emerald-950/80 border border-emerald-200 dark:border-emerald-500/30 flex items-center justify-center text-emerald-600 dark:text-emerald-400 font-extrabold shadow-xs shrink-0">
-              <Package className="w-4 h-4 sm:w-5 sm:h-5" />
+            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-amber-50 dark:bg-amber-950/80 border border-amber-200 dark:border-amber-500/30 flex items-center justify-center text-amber-600 dark:text-amber-400 font-extrabold shadow-xs shrink-0">
+              <Trophy className="w-4 h-4 sm:w-5 sm:h-5" />
             </div>
           </div>
           <div>
             <h3 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-slate-100 tracking-tight">
-              {totalUnits.toLocaleString()}{' '}
-              <span className="text-xs font-bold text-slate-500">Units</span>
+              {closedAndAwardedCount}{' '}
+              <span className="text-xs font-bold text-slate-500">RFQs Closed</span>
             </h3>
             <p className="text-[11px] text-slate-600 dark:text-slate-400 font-medium mt-1 flex items-center space-x-1">
-              <TrendingUp className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0 inline" />
-              <span>Across {totalLeads} RFQs ({avgUnitsPerRfq} avg/RFQ)</span>
+              <TrendingUp className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0 inline" />
+              <span>Across {totalLeads} RFQs ({closedPct}% completion rate)</span>
             </p>
           </div>
         </div>

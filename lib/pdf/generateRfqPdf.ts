@@ -174,13 +174,13 @@ export async function generateRfqPdf(lead: any, settings?: any): Promise<Buffer>
       const cardW = (contentWidth - 12) / 2;
       const cardH = 60;
 
-      // Left Box: Issuing Office
+      // Left Box: RFQ Requested By
       doc.roundedRect(margin, infoY, cardW, cardH, 6).fill(lightBg).stroke(borderColor);
       doc
         .fillColor(indigoAccent)
         .fontSize(8)
         .font('Helvetica-Bold')
-        .text('ISSUING PROCUREMENT OFFICE', margin + 12, infoY + 10, { characterSpacing: 0.5 });
+        .text('RFQ REQUESTED BY', margin + 12, infoY + 10, { characterSpacing: 0.5 });
 
       doc
         .fillColor(primaryColor)
@@ -221,7 +221,7 @@ export async function generateRfqPdf(lead: any, settings?: any): Promise<Buffer>
       // ----------------------------------------------------
       // 4. ITEMS & QUANTITIES SCHEDULE TABLE
       // ----------------------------------------------------
-      drawSectionHeader('1. ITEM REQUIREMENTS & SPECIFICATIONS SCHEDULE', currentY);
+      drawSectionHeader('BILLS OF MATERIAL', currentY);
       currentY += 20;
 
       const tableTop = currentY;
@@ -326,7 +326,41 @@ export async function generateRfqPdf(lead: any, settings?: any): Promise<Buffer>
       currentY += 12;
 
       // ----------------------------------------------------
-      // 5. GENERAL REMARKS & TERMS CALLOUT
+      // 5. EXPECTED CREDIT TERMS (IF PROVIDED)
+      // ----------------------------------------------------
+      const expectedCredit = lead.expected_credit?.trim() || '';
+      if (expectedCredit) {
+        checkPageBreak(45);
+
+        const credY = currentY;
+        doc.fontSize(8.5);
+        const credTextH = doc.heightOfString(expectedCredit, { width: contentWidth - 32 });
+        const credBoxH = Math.max(34, credTextH + 18);
+
+        const greenBg = '#F0FDF4';
+        const greenBorder = '#16A34A';
+        const greenText = '#15803D';
+
+        doc.roundedRect(margin, credY, contentWidth, credBoxH, 6).fill(greenBg).stroke('#BBF7D0');
+        doc.roundedRect(margin, credY, 4, credBoxH, 2).fill(greenBorder);
+
+        doc
+          .fillColor(greenText)
+          .fontSize(8)
+          .font('Helvetica-Bold')
+          .text('EXPECTED CREDIT TERMS:', margin + 14, credY + 8);
+
+        doc
+          .fillColor('#166534')
+          .fontSize(8.5)
+          .font('Helvetica-Bold')
+          .text(expectedCredit, margin + 14, credY + 20, { width: contentWidth - 28 });
+
+        currentY = credY + credBoxH + 14;
+      }
+
+      // ----------------------------------------------------
+      // 6. GENERAL REMARKS & TERMS CALLOUT
       // ----------------------------------------------------
       const generalNotes = cleanSpecifications(lead.remarks);
       if (generalNotes) {

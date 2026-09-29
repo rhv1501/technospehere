@@ -10,6 +10,7 @@ import {
   Eye,
   Loader2,
   AlertTriangle,
+  Trophy,
 } from 'lucide-react';
 import { formatDate } from '@/lib/utils';
 import { cleanProductTitle } from '@/lib/leadUtils';
@@ -32,12 +33,14 @@ export function LeadsTable({ leads, categories, onOpenCreateModal }: LeadsTableP
   const [deleteLoading, setDeleteLoading] = useState(false);
 
   const filteredLeads = leads.filter((lead) => {
+    const winnerName = lead.winning_vendor?.company_name || '';
     const matchesSearch =
       !searchTerm ||
       lead.lead_number?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       lead.customer_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       lead.lead_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      lead.product_item?.toLowerCase().includes(searchTerm.toLowerCase());
+      lead.product_item?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      winnerName.toLowerCase().includes(searchTerm.toLowerCase());
 
     const matchesCategory =
       selectedCategory === 'all' || lead.category_id === selectedCategory;
@@ -89,6 +92,19 @@ export function LeadsTable({ leads, categories, onOpenCreateModal }: LeadsTableP
             Quoted
           </span>
         );
+      case 'completed':
+        return (
+          <span className="px-2.5 py-1 rounded-full text-[11px] font-black bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-700/60 inline-flex items-center space-x-1 shadow-2xs">
+            <Trophy className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
+            <span>Closed & Awarded</span>
+          </span>
+        );
+      case 'cancelled':
+        return (
+          <span className="px-2 py-0.5 rounded text-[11px] font-medium bg-rose-50 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800/40">
+            Cancelled
+          </span>
+        );
       default:
         return (
           <span className="px-2 py-0.5 rounded text-[11px] font-medium bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400">
@@ -106,7 +122,7 @@ export function LeadsTable({ leads, categories, onOpenCreateModal }: LeadsTableP
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
           <input
             type="text"
-            placeholder="Search RFQs..."
+            placeholder="Search RFQs, customers, or winning vendors..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className="w-full pl-9 pr-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800/80 rounded-lg text-xs text-slate-900 dark:text-slate-100 placeholder-slate-400 font-medium focus:outline-none focus:border-indigo-500"
@@ -136,6 +152,8 @@ export function LeadsTable({ leads, categories, onOpenCreateModal }: LeadsTableP
             <option value="draft">Drafts</option>
             <option value="ready_to_send">Ready</option>
             <option value="sent">Sent</option>
+            <option value="completed">Completed & Awarded 🏆</option>
+            <option value="cancelled">Cancelled</option>
           </select>
 
           <button
@@ -156,7 +174,7 @@ export function LeadsTable({ leads, categories, onOpenCreateModal }: LeadsTableP
               <th className="px-4 py-3">RFQ Reference</th>
               <th className="px-4 py-3">Product & Qty</th>
               <th className="px-4 py-3">Category</th>
-              <th className="px-4 py-3">Vendors</th>
+              <th className="px-4 py-3">Vendors / Winner</th>
               <th className="px-4 py-3">Status</th>
               <th className="px-4 py-3 text-right">Actions</th>
             </tr>
@@ -172,6 +190,15 @@ export function LeadsTable({ leads, categories, onOpenCreateModal }: LeadsTableP
               filteredLeads.map((lead) => {
                 const assignedVendorsCount = lead.lead_vendors ? lead.lead_vendors.length : 0;
                 const attachmentCount = lead.lead_attachments ? lead.lead_attachments.length : 0;
+                const winner =
+                  lead.winning_vendor ||
+                  (lead.winning_vendor_id && lead.lead_vendors
+                    ? lead.lead_vendors.find(
+                        (lv: any) =>
+                          lv.vendor_id === lead.winning_vendor_id ||
+                          (lv.vendors && lv.vendors.id === lead.winning_vendor_id)
+                      )?.vendors
+                    : null);
 
                 return (
                   <tr key={lead.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30 transition-colors">
@@ -198,7 +225,24 @@ export function LeadsTable({ leads, categories, onOpenCreateModal }: LeadsTableP
                       </span>
                     </td>
                     <td className="px-4 py-3">
-                      {assignedVendorsCount > 0 ? (
+                      {lead.winning_vendor_id || lead.status === 'completed' ? (
+                        <div className="space-y-0.5">
+                          <div className="flex items-center space-x-1.5 font-black text-amber-700 dark:text-amber-300 text-xs">
+                            <Trophy className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                            <span className="truncate max-w-[160px]" title={winner?.company_name || 'Awarded Vendor'}>
+                              {winner?.company_name || 'Awarded Vendor'}
+                            </span>
+                          </div>
+                          {lead.winning_amount && (
+                            <div className="text-[11px] font-black text-emerald-700 dark:text-emerald-400 pl-5">
+                              ₹{Number(lead.winning_amount).toLocaleString('en-IN')}
+                            </div>
+                          )}
+                          <div className="text-[10px] text-slate-500 dark:text-slate-400 pl-5 font-medium">
+                            {assignedVendorsCount} vendor{assignedVendorsCount !== 1 ? 's' : ''} assigned
+                          </div>
+                        </div>
+                      ) : assignedVendorsCount > 0 ? (
                         <span className="text-emerald-600 dark:text-emerald-400 text-[11px] font-medium">
                           {assignedVendorsCount} assigned
                         </span>

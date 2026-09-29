@@ -43,12 +43,14 @@ export function EditLeadModal({
     customer_name: string;
     lead_name: string;
     category_id: string;
+    expected_credit: string;
     remarks: string;
     status: 'draft' | 'ready_to_send' | 'sent' | 'quoted' | 'completed' | 'cancelled';
   }>({
     customer_name: '',
     lead_name: '',
     category_id: '',
+    expected_credit: '',
     remarks: '',
     status: 'draft',
   });
@@ -61,6 +63,7 @@ export function EditLeadModal({
         customer_name: lead.customer_name || '',
         lead_name: extractPrNumber(lead.lead_name),
         category_id: lead.category_id || '',
+        expected_credit: lead.expected_credit || '',
         remarks: cleanSpecifications(lead.remarks) || cleanSpecifications(lead.specifications),
         status: lead.status || 'draft',
       });
@@ -135,6 +138,7 @@ export function EditLeadModal({
       unit_price_estimate: payloadFields.unit_price_estimate,
       specifications: payloadFields.specifications,
       category_id: formData.category_id || undefined,
+      expected_credit: formData.expected_credit,
       remarks: formData.remarks,
       status: formData.status,
     };
@@ -267,6 +271,17 @@ export function EditLeadModal({
                   <option value="completed">Completed</option>
                   <option value="cancelled">Cancelled</option>
                 </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Expected Credit (Optional)</label>
+                <input
+                  type="text"
+                  placeholder="e.g. 30 Days Credit, Net 45"
+                  value={formData.expected_credit || ''}
+                  onChange={(e) => setFormData({ ...formData, expected_credit: e.target.value })}
+                  className="w-full px-3 py-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-medium text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+                />
               </div>
 
               <div>

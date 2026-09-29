@@ -6,6 +6,38 @@ export interface LeadLineItem {
   specifications?: string;
 }
 
+export interface EndUserDetails {
+  company_name?: string;
+  address?: string;
+  contact_number?: string;
+  email?: string;
+  website?: string;
+  phone_number?: string;
+}
+
+export function formatEndUserDetailsToComment(endUser?: EndUserDetails | null): string {
+  if (!endUser) return '';
+  const hasContent = Object.values(endUser).some((v) => v && typeof v === 'string' && v.trim());
+  if (!hasContent) return '';
+  return `<!-- END_USER_DETAILS: ${JSON.stringify(endUser)} -->`;
+}
+
+export function parseEndUserDetailsFromLead(lead?: { remarks?: string | null; specifications?: string | null } | null): EndUserDetails | null {
+  if (!lead) return null;
+  const rawText = (lead.remarks || '') + '\n' + (lead.specifications || '');
+  if (rawText.includes('<!-- END_USER_DETAILS:')) {
+    try {
+      const match = rawText.match(/<!-- END_USER_DETAILS:\s*([\s\S]*?)\s*-->/);
+      if (match && match[1]) {
+        return JSON.parse(match[1]);
+      }
+    } catch (e) {
+      console.error('Error parsing END_USER_DETAILS:', e);
+    }
+  }
+  return null;
+}
+
 /**
  * Strips HTML comment JSON tags (e.g. <!-- LINE_ITEMS_JSON: ... -->)
  * and repetitive auto-generated Line Item blocks from raw specifications text.
@@ -13,8 +45,12 @@ export interface LeadLineItem {
 export function cleanSpecifications(rawSpecs?: string | null): string {
   if (!rawSpecs) return '';
 
-  // 1. Remove JSON comment tag
-  let clean = rawSpecs.replace(/<!-- LINE_ITEMS_JSON:[\s\S]*?-->/g, '').trim();
+  // 1. Remove JSON comment tags & CLOSURE_DATA blocks
+  let clean = rawSpecs
+    .replace(/<!-- LINE_ITEMS_JSON:[\s\S]*?-->/g, '')
+    .replace(/<!-- END_USER_DETAILS:[\s\S]*?-->/g, '')
+    .replace(/\[\[CLOSURE_DATA:[\s\S]*?\]\]/g, '')
+    .trim();
 
   // 2. If it contains General Terms & Notes:
   if (clean.includes('General Terms & Notes:')) {
@@ -235,6 +271,7 @@ export function generateRfqEmailHtml(params: {
   const companyPhone = settings?.phone_number || settings?.official_phone || '+91 98765 43210';
 
   const lineItems = parseLineItemsFromLead(lead);
+  const expectedCredit = lead.expected_credit?.trim() || '';
   const generalRemarks = cleanSpecifications(lead.remarks);
 
   const otherAttachments = (lead.lead_attachments || []).filter((att: any) => !att.file_name?.startsWith('RFQ_'));
@@ -383,11 +420,11 @@ export function generateRfqEmailHtml(params: {
                 </tr>
               </table>
 
-              <!-- Issuing Procurement Office Card -->
+              <!-- RFQ Requested By Card -->
               <table width="100%" border="0" cellpadding="0" cellspacing="0" class="card-box" style="background-color: #EEF2FF; border: 1px solid #C7D2FE; border-radius: 10px; margin-bottom: 32px; padding: 18px 22px;">
                 <tr>
                   <td>
-                    <div style="font-size: 11px; font-weight: 800; color: #4338CA; text-transform: uppercase; letter-spacing: 0.6px;">Issuing Procurement Office</div>
+                    <div style="font-size: 11px; font-weight: 800; color: #4338CA; text-transform: uppercase; letter-spacing: 0.6px;">RFQ Requested By</div>
                     <div style="font-size: 15px; font-weight: 800; color: #1E293B; margin-top: 6px;">${companyName}</div>
                     <div style="font-size: 13px; color: #475569; margin-top: 4px; line-height: 1.5;">${companyAddress}</div>
                     <div style="font-size: 13px; color: #475569; margin-top: 4px;">Email: <strong style="color: #1E293B;">${companyEmail}</strong> &nbsp;|&nbsp; Phone: <strong style="color: #1E293B;">${companyPhone}</strong></div>
@@ -397,7 +434,7 @@ export function generateRfqEmailHtml(params: {
 
               <!-- Section Title -->
               <div style="font-size: 13px; font-weight: 800; color: #0F172A; text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 14px; border-left: 4px solid #4338CA; padding-left: 10px;">
-                1. Item Requirements & Technical Specifications Schedule
+                Bills of Material
               </div>
 
               <!-- Line Items Table -->
@@ -413,6 +450,16 @@ export function generateRfqEmailHtml(params: {
                   ${itemsRowsHtml}
                 </tbody>
               </table>
+
+              ${
+                expectedCredit
+                  ? `<!-- Expected Credit Card -->
+              <div class="card-box" style="background-color: #F0FDF4; border: 1px solid #BBF7D0; border-left: 4px solid #16A34A; border-radius: 8px; padding: 18px 22px; margin-bottom: 32px;">
+                <div style="font-size: 11px; font-weight: 800; color: #15803D; text-transform: uppercase; letter-spacing: 0.6px;">Expected Credit Terms:</div>
+                <div style="font-size: 14px; color: #166534; font-weight: 700; margin-top: 6px; white-space: pre-wrap;">${expectedCredit.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
+              </div>`
+                  : ''
+              }
 
               ${
                 generalRemarks

@@ -18,10 +18,16 @@ import {
   ChevronRight,
   Calculator,
   ListOrdered,
+  UserCheck,
 } from 'lucide-react';
 import { createLead, uploadLeadAttachment, type LeadInput } from '@/actions/leads';
 import { toast } from 'sonner';
-import { LeadLineItem, formatLineItemsToPayload } from '@/lib/leadUtils';
+import {
+  LeadLineItem,
+  EndUserDetails,
+  formatLineItemsToPayload,
+  formatEndUserDetailsToComment,
+} from '@/lib/leadUtils';
 import { fileToBase64, extractPrNumber, formatPrReference } from '@/lib/utils';
 
 interface Category {
@@ -45,12 +51,24 @@ export function CreateLeadModal({
     customer_name: string;
     lead_name: string;
     category_id: string;
+    expected_credit: string;
     remarks: string;
   }>({
     customer_name: '',
     lead_name: '',
     category_id: categories[0]?.id || '',
+    expected_credit: '',
     remarks: '',
+  });
+
+  const [showEndUserDetails, setShowEndUserDetails] = useState(false);
+  const [endUserFormData, setEndUserFormData] = useState<EndUserDetails>({
+    company_name: '',
+    address: '',
+    contact_number: '',
+    email: '',
+    website: '',
+    phone_number: '',
   });
 
   const [lineItems, setLineItems] = useState<LeadLineItem[]>([
@@ -82,7 +100,17 @@ export function CreateLeadModal({
         customer_name: '',
         lead_name: '',
         category_id: categories[0]?.id || '',
+        expected_credit: '',
         remarks: '',
+      });
+      setShowEndUserDetails(false);
+      setEndUserFormData({
+        company_name: '',
+        address: '',
+        contact_number: '',
+        email: '',
+        website: '',
+        phone_number: '',
       });
       setLineItems([
         {
@@ -153,7 +181,12 @@ export function CreateLeadModal({
 
     setLoading(true);
 
-    const payloadFields = formatLineItemsToPayload(lineItems, formData.remarks);
+    const endUserComment = showEndUserDetails ? formatEndUserDetailsToComment(endUserFormData) : '';
+    const finalRemarks = endUserComment
+      ? `${formData.remarks || ''}\n${endUserComment}`.trim()
+      : formData.remarks;
+
+    const payloadFields = formatLineItemsToPayload(lineItems, finalRemarks);
 
     const leadPayload: LeadInput = {
       customer_name: formData.customer_name,
@@ -163,7 +196,8 @@ export function CreateLeadModal({
       unit_price_estimate: payloadFields.unit_price_estimate,
       specifications: payloadFields.specifications,
       category_id: formData.category_id || undefined,
-      remarks: formData.remarks,
+      expected_credit: formData.expected_credit,
+      remarks: finalRemarks,
       status: initialStatus,
     };
 
@@ -322,6 +356,139 @@ export function CreateLeadModal({
                   ))}
                 </select>
               </div>
+            </div>
+
+            {/* Checkbox: Add end user details */}
+            <div className="pt-3 border-t border-slate-200/80 dark:border-slate-800/80 space-y-3">
+              <label className="inline-flex items-center space-x-2.5 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={showEndUserDetails}
+                  onChange={(e) => {
+                    const checked = e.target.checked;
+                    setShowEndUserDetails(checked);
+                    if (checked && !endUserFormData.company_name && formData.customer_name) {
+                      setEndUserFormData((prev) => ({
+                        ...prev,
+                        company_name: formData.customer_name,
+                      }));
+                    }
+                  }}
+                  className="w-4 h-4 rounded border-slate-300 dark:border-slate-700 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                />
+                <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                  Add end user details
+                </span>
+              </label>
+
+              {/* End User Details Form Grid */}
+              {showEndUserDetails && (
+                <div className="p-4 bg-white dark:bg-slate-950 border border-indigo-200 dark:border-indigo-800/60 rounded-xl space-y-3 shadow-2xs animate-fade-in">
+                  <div className="flex items-center justify-between pb-2 border-b border-slate-200 dark:border-slate-800/80">
+                    <div className="flex items-center space-x-2 text-indigo-600 dark:text-indigo-400">
+                      <UserCheck className="w-4 h-4" />
+                      <span className="text-xs font-bold uppercase tracking-wider">
+                        End User Information
+                      </span>
+                    </div>
+                    <span className="text-[10px] font-semibold text-slate-500 dark:text-slate-400">
+                      Prefilled from available data
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        Company Name
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="End User Company Name"
+                        value={endUserFormData.company_name || ''}
+                        onChange={(e) =>
+                          setEndUserFormData({ ...endUserFormData, company_name: e.target.value })
+                        }
+                        className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg text-xs font-semibold text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:border-indigo-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        Contact Number
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="e.g. +91 98765 43210"
+                        value={endUserFormData.contact_number || ''}
+                        onChange={(e) =>
+                          setEndUserFormData({ ...endUserFormData, contact_number: e.target.value })
+                        }
+                        className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg text-xs font-medium text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:border-indigo-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        Phone Number
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="e.g. 080 1234 5678"
+                        value={endUserFormData.phone_number || ''}
+                        onChange={(e) =>
+                          setEndUserFormData({ ...endUserFormData, phone_number: e.target.value })
+                        }
+                        className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg text-xs font-medium text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:border-indigo-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        Email ID
+                      </label>
+                      <input
+                        type="email"
+                        placeholder="enduser@company.com"
+                        value={endUserFormData.email || ''}
+                        onChange={(e) =>
+                          setEndUserFormData({ ...endUserFormData, email: e.target.value })
+                        }
+                        className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg text-xs font-medium text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:border-indigo-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        Website
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="https://www.endusercompany.com"
+                        value={endUserFormData.website || ''}
+                        onChange={(e) =>
+                          setEndUserFormData({ ...endUserFormData, website: e.target.value })
+                        }
+                        className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg text-xs font-medium text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:border-indigo-500"
+                      />
+                    </div>
+
+                    <div className="sm:col-span-2 md:col-span-3">
+                      <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        Address
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="End User Complete Address"
+                        value={endUserFormData.address || ''}
+                        onChange={(e) =>
+                          setEndUserFormData({ ...endUserFormData, address: e.target.value })
+                        }
+                        className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg text-xs font-medium text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:border-indigo-500"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 
@@ -509,17 +676,32 @@ export function CreateLeadModal({
                 )}
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  General Remarks / Internal Notes
-                </label>
-                <textarea
-                  rows={3}
-                  placeholder="e.g. High priority client requirement..."
-                  value={formData.remarks || ''}
-                  onChange={(e) => setFormData({ ...formData, remarks: e.target.value })}
-                  className="w-full px-3 py-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-medium text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:border-indigo-500 leading-relaxed"
-                />
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Expected Credit (Optional)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. 30 Days Credit, Net 45"
+                    value={formData.expected_credit || ''}
+                    onChange={(e) => setFormData({ ...formData, expected_credit: e.target.value })}
+                    className="w-full px-3 py-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-medium text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    General Remarks / Internal Notes
+                  </label>
+                  <textarea
+                    rows={2}
+                    placeholder="e.g. High priority client requirement..."
+                    value={formData.remarks || ''}
+                    onChange={(e) => setFormData({ ...formData, remarks: e.target.value })}
+                    className="w-full px-3 py-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-medium text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:border-indigo-500 leading-relaxed"
+                  />
+                </div>
               </div>
             </div>
           </div>

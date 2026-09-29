@@ -150,11 +150,14 @@ export type Database = {
       leads: {
         Row: {
           category_id: string | null
+          closed_at: string | null
+          closure_notes: string | null
           created_at: string
           created_by: string | null
           customer_name: string
           delivery_terms: string | null
           due_date: string | null
+          expected_credit: string | null
           gst_rate: number | null
           id: string
           lead_name: string
@@ -167,14 +170,19 @@ export type Database = {
           unit_price_estimate: number | null
           updated_at: string
           warranty: string | null
+          winning_amount: number | null
+          winning_vendor_id: string | null
         }
         Insert: {
           category_id?: string | null
+          closed_at?: string | null
+          closure_notes?: string | null
           created_at?: string
           created_by?: string | null
           customer_name: string
           delivery_terms?: string | null
           due_date?: string | null
+          expected_credit?: string | null
           gst_rate?: number | null
           id?: string
           lead_name: string
@@ -187,14 +195,19 @@ export type Database = {
           unit_price_estimate?: number | null
           updated_at?: string
           warranty?: string | null
+          winning_amount?: number | null
+          winning_vendor_id?: string | null
         }
         Update: {
           category_id?: string | null
+          closed_at?: string | null
+          closure_notes?: string | null
           created_at?: string
           created_by?: string | null
           customer_name?: string
           delivery_terms?: string | null
           due_date?: string | null
+          expected_credit?: string | null
           gst_rate?: number | null
           id?: string
           lead_name?: string
@@ -207,6 +220,8 @@ export type Database = {
           unit_price_estimate?: number | null
           updated_at?: string
           warranty?: string | null
+          winning_amount?: number | null
+          winning_vendor_id?: string | null
         }
         Relationships: [
           {
