@@ -5,14 +5,14 @@ import { formatDate } from '@/lib/utils';
 export async function generateRfqPdf(lead: any, settings?: any): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     try {
-      const poReference = lead.lead_name?.trim() || lead.lead_number || 'N/A';
+      const prReference = lead.lead_name?.trim() || lead.lead_number || 'N/A';
 
       const doc = new PDFDocument({
         size: 'A4',
         margins: { top: 36, bottom: 0, left: 36, right: 36 },
         bufferPages: true,
         info: {
-          Title: `RFQ_${poReference}`,
+          Title: `RFQ_${prReference}`,
           Author: settings?.company_name || 'TechnoSphere Business Solutions',
           Subject: `Request for Quotation - ${lead.product_item || 'Procurement'}`,
           Keywords: 'RFQ, Quotation, Procurement, TechnoSphere',
@@ -25,10 +25,11 @@ export async function generateRfqPdf(lead: any, settings?: any): Promise<Buffer>
       doc.on('error', (err) => reject(err));
 
       const companyName = settings?.company_name || 'TECHNOSPHERE BUSINESS SOLUTIONS';
-      const companyAddress = settings?.company_address || '123 Enterprise Park, Tech Hub, Bangalore 560001';
+      const rawAddress = settings?.office_address || settings?.company_address || '';
+      const companyAddress = rawAddress ? rawAddress.replace(/\r?\n+/g, ', ').replace(/\s+,/g, ',').replace(/,\s*,/g, ',').trim() : '';
       const companyEmail = settings?.official_email || 'sales@technosphere.in';
-      const companyPhone = settings?.official_phone || '+91 98765 43210';
-      const companyGst = settings?.gst_number || '29AAAAA0000A1Z5';
+      const companyPhone = settings?.phone_number || settings?.official_phone || '';
+      const companyGst = settings?.gstin_number || settings?.gst_number || '';
 
       // Design Color Palette
       const darkNavy = '#0F172A'; // Header BG
@@ -76,7 +77,7 @@ export async function generateRfqPdf(lead: any, settings?: any): Promise<Buffer>
           .text(companyName, margin + 10, margin + 9)
           .fillColor('#94A3B8')
           .font('Helvetica')
-          .text(`PO Ref: ${poReference}`, margin + contentWidth - 160, margin + 9, { align: 'right', width: 150 });
+          .text(`PR Ref: ${prReference}`, margin + contentWidth - 160, margin + 9, { align: 'right', width: 150 });
       };
 
       // ----------------------------------------------------
@@ -125,7 +126,7 @@ export async function generateRfqPdf(lead: any, settings?: any): Promise<Buffer>
         .fillColor('#E0E7FF')
         .fontSize(9)
         .font('Helvetica-Bold')
-        .text(`PO REF: ${poReference}`, badgeX + 5, badgeY + 28, { width: badgeW - 10, align: 'center' });
+        .text(`PR REF: ${prReference}`, badgeX + 5, badgeY + 28, { width: badgeW - 10, align: 'center' });
 
       let currentY = margin + headerHeight + 12;
 
@@ -172,7 +173,7 @@ export async function generateRfqPdf(lead: any, settings?: any): Promise<Buffer>
       // ----------------------------------------------------
       const infoY = currentY;
       const cardW = (contentWidth - 12) / 2;
-      const cardH = 60;
+      const cardH = 68;
 
       // Left Box: RFQ Requested By
       doc.roundedRect(margin, infoY, cardW, cardH, 6).fill(lightBg).stroke(borderColor);
@@ -180,17 +181,21 @@ export async function generateRfqPdf(lead: any, settings?: any): Promise<Buffer>
         .fillColor(indigoAccent)
         .fontSize(8)
         .font('Helvetica-Bold')
-        .text('RFQ REQUESTED BY', margin + 12, infoY + 10, { characterSpacing: 0.5 });
+        .text('RFQ REQUESTED BY:', margin + 12, infoY + 10, { characterSpacing: 0.5 });
 
       doc
         .fillColor(primaryColor)
-        .fontSize(9)
+        .fontSize(9.5)
         .font('Helvetica-Bold')
-        .text(companyName, margin + 12, infoY + 24, { width: cardW - 24, ellipsis: true })
+        .text('Purchase Team', margin + 12, infoY + 23, { width: cardW - 24, ellipsis: true })
+        .fillColor(primaryColor)
+        .fontSize(8.5)
+        .font('Helvetica-Bold')
+        .text(companyName, margin + 12, infoY + 36, { width: cardW - 24, ellipsis: true })
         .fillColor(textColor)
-        .fontSize(8)
+        .fontSize(7.5)
         .font('Helvetica')
-        .text(companyAddress, margin + 12, infoY + 37, { width: cardW - 24, height: 18, ellipsis: true });
+        .text(companyAddress, margin + 12, infoY + 49, { width: cardW - 24, height: 16, ellipsis: true });
 
       // Right Box: RFQ & Procurement Details
       const rightCardX = margin + cardW + 12;
@@ -205,10 +210,10 @@ export async function generateRfqPdf(lead: any, settings?: any): Promise<Buffer>
         .fillColor(textMuted)
         .fontSize(8)
         .font('Helvetica-Bold')
-        .text('PO Reference No:', rightCardX + 12, infoY + 26)
+        .text('PR Reference No:', rightCardX + 12, infoY + 26)
         .fillColor(primaryColor)
         .font('Helvetica-Bold')
-        .text(poReference, rightCardX + 105, infoY + 26, { width: cardW - 117, ellipsis: true })
+        .text(prReference, rightCardX + 105, infoY + 26, { width: cardW - 117, ellipsis: true })
         .fillColor(textMuted)
         .font('Helvetica-Bold')
         .text('Category:', rightCardX + 12, infoY + 41)

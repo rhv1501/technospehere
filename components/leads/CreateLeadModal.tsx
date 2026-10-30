@@ -322,7 +322,7 @@ export function CreateLeadModal({
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  PO / RFQ Reference Number <span className="text-rose-500 font-bold">*</span>
+                  PR / RFQ Reference Number <span className="text-rose-500 font-bold">*</span>
                 </label>
                 <div className="flex rounded-xl overflow-hidden border border-slate-200 dark:border-slate-800 focus-within:border-indigo-500 focus-within:ring-2 focus-within:ring-indigo-500/20 shadow-2xs">
                   <span className="inline-flex items-center px-3 bg-slate-100 dark:bg-slate-800/80 text-slate-600 dark:text-slate-300 font-mono font-bold text-xs border-r border-slate-200 dark:border-slate-800 select-none shrink-0">

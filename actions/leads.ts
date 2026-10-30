@@ -49,11 +49,25 @@ export async function enrichLeadsWithWinningVendor(supabase: any, leads: any[]) 
           if (!updatedLead.closed_at && closureObj.closed_at) {
             updatedLead.closed_at = closureObj.closed_at;
           }
+          if (!updatedLead.closure_outcome && closureObj.closure_outcome) {
+            updatedLead.closure_outcome = closureObj.closure_outcome;
+          }
+          if (!updatedLead.loss_reason && closureObj.loss_reason) {
+            updatedLead.loss_reason = closureObj.loss_reason;
+          }
+          if (!updatedLead.closure_items && closureObj.closure_items) {
+            updatedLead.closure_items = closureObj.closure_items;
+          }
         }
       } catch (err) {
         console.error('Failed to parse CLOSURE_DATA from remarks:', err);
       }
     }
+
+    if (updatedLead.remarks) {
+      updatedLead.remarks = cleanSpecifications(updatedLead.remarks);
+    }
+
     return updatedLead;
   });
 
@@ -105,6 +119,102 @@ export async function enrichLeadsWithWinningVendor(supabase: any, leads: any[]) 
     }
     return lead;
   });
+}
+
+export interface GetLeadsPaginatedParams {
+  page?: number;
+  pageSize?: number;
+  search?: string;
+  status?: string;
+  categoryId?: string;
+}
+
+export async function getLeadsPaginated({
+  page = 1,
+  pageSize = 15,
+  search,
+  status,
+  categoryId,
+}: GetLeadsPaginatedParams = {}) {
+  try {
+    const supabase = createAdminClient();
+
+    const from = Math.max(0, (page - 1) * pageSize);
+    const to = from + pageSize - 1;
+
+    let query = supabase
+      .from('leads')
+      .select(`
+        *,
+        categories ( id, name ),
+        lead_attachments ( id, file_name, file_path, file_size, file_type, created_at ),
+        lead_vendors (
+          id,
+          vendor_id,
+          email_sent,
+          email_sent_at,
+          whatsapp_prepared,
+          whatsapp_prepared_at,
+          vendors (
+            id,
+            company_name,
+            contact_person,
+            email,
+            whatsapp_number,
+            status
+          )
+        )
+      `, { count: 'exact' })
+      .order('created_at', { ascending: false });
+
+    if (status && status !== 'all') {
+      if (status === 'completed') {
+        query = query.or('status.eq.completed,closure_outcome.eq.win,status.eq.won');
+      } else if (status === 'cancelled') {
+        query = query.or('status.eq.cancelled,closure_outcome.eq.lost,status.eq.lost');
+      } else {
+        query = query.eq('status', status);
+      }
+    }
+
+    if (categoryId && categoryId !== 'all') {
+      query = query.eq('category_id', categoryId);
+    }
+
+    if (search && search.trim()) {
+      const s = `%${search.trim()}%`;
+      query = query.or(`lead_number.ilike.${s},customer_name.ilike.${s},lead_name.ilike.${s},product_item.ilike.${s},expected_credit.ilike.${s}`);
+    }
+
+    query = query.range(from, to);
+
+    const { data, count, error } = await query;
+    if (error) throw error;
+
+    const enrichedLeads = await enrichLeadsWithWinningVendor(supabase, data || []);
+    const totalCount = count ?? 0;
+    const hasMore = to < totalCount - 1;
+
+    return {
+      success: true,
+      leads: enrichedLeads,
+      totalCount,
+      hasMore,
+      page,
+      pageSize,
+    };
+  } catch (error: any) {
+    console.error('Error fetching paginated leads:', error);
+    return {
+      success: false,
+      error: error.message || 'Failed to fetch leads',
+      leads: [],
+      totalCount: 0,
+      hasMore: false,
+      page,
+      pageSize,
+    };
+  }
 }
 
 export async function getLeads(filters?: { search?: string; status?: string; categoryId?: string }) {
@@ -302,23 +412,30 @@ export async function updateLead(id: string, data: Partial<LeadInput>) {
 
 export async function closeAndAwardRfq(params: {
   leadId: string;
+  outcome: 'win' | 'lost';
   winningVendorId?: string | null;
   winningAmount?: number | null;
   closureNotes?: string | null;
-  status?: 'completed' | 'cancelled' | 'draft';
+  lossReason?: string | null;
+  itemPricing?: Array<{ id: string; winning_unit_price: number; winning_total: number }>;
+  status?: string;
 }) {
   try {
-    const { leadId, winningVendorId, winningAmount, closureNotes, status } = params;
+    const { leadId, outcome, winningVendorId, winningAmount, closureNotes, lossReason, itemPricing } = params;
     const supabase = createAdminClient();
 
     const closedAtStr = new Date().toISOString();
+    const finalStatus = params.status || (outcome === 'win' ? 'completed' : 'cancelled');
 
     const fullPayload: any = {
-      status: status || 'completed',
+      status: finalStatus,
       closed_at: closedAtStr,
-      winning_vendor_id: winningVendorId || null,
-      winning_amount: winningAmount != null ? Number(winningAmount) : null,
+      closure_outcome: outcome,
+      winning_vendor_id: outcome === 'win' ? (winningVendorId || null) : null,
+      winning_amount: outcome === 'win' && winningAmount != null ? Number(winningAmount) : null,
       closure_notes: closureNotes?.trim() || null,
+      loss_reason: outcome === 'lost' ? (lossReason?.trim() || 'Requirement Dropped') : null,
+      closure_items: outcome === 'win' ? (itemPricing || null) : null,
     };
 
     // 1. First, attempt native column update
@@ -344,9 +461,12 @@ export async function closeAndAwardRfq(params: {
       currentRemarks = currentRemarks.replace(/\[\[CLOSURE_DATA:[\s\S]*?\]\]/g, '').trim();
 
       const closureDataJson = JSON.stringify({
-        winning_vendor_id: winningVendorId || null,
-        winning_amount: winningAmount != null ? Number(winningAmount) : null,
+        closure_outcome: outcome,
+        winning_vendor_id: outcome === 'win' ? (winningVendorId || null) : null,
+        winning_amount: outcome === 'win' && winningAmount != null ? Number(winningAmount) : null,
         closure_notes: closureNotes?.trim() || null,
+        loss_reason: outcome === 'lost' ? (lossReason?.trim() || 'Requirement Dropped') : null,
+        closure_items: outcome === 'win' ? (itemPricing || null) : null,
         closed_at: closedAtStr,
       });
 
@@ -355,7 +475,7 @@ export async function closeAndAwardRfq(params: {
       res = await supabase
         .from('leads')
         .update({
-          status: status || 'completed',
+          status: finalStatus,
           remarks: updatedRemarks,
         })
         .eq('id', leadId)
@@ -371,11 +491,69 @@ export async function closeAndAwardRfq(params: {
     revalidatePath(`/dashboard/leads/${leadId}`);
     revalidatePath('/dashboard/leads');
     revalidatePath('/dashboard');
+    revalidatePath('/dashboard/vendors');
 
     return { success: true, lead: enriched };
   } catch (error: any) {
     console.error('Error closing RFQ:', error);
     return { success: false, error: error.message || 'Failed to close RFQ' };
+  }
+}
+
+export async function reopenLead(leadId: string) {
+  try {
+    const supabase = createAdminClient();
+
+    // Fetch existing remarks to clean up any CLOSURE_DATA fallback
+    const { data: existingLead } = await supabase
+      .from('leads')
+      .select('remarks')
+      .eq('id', leadId)
+      .single();
+
+    let cleanRemarks = existingLead?.remarks || '';
+    cleanRemarks = cleanRemarks.replace(/\[\[CLOSURE_DATA:[\s\S]*?\]\]/g, '').trim();
+
+    let res = await supabase
+      .from('leads')
+      .update({
+        status: 'draft',
+        closed_at: null,
+        closure_outcome: null,
+        winning_vendor_id: null,
+        winning_amount: null,
+        closure_notes: null,
+        loss_reason: null,
+        closure_items: null,
+        remarks: cleanRemarks,
+      })
+      .eq('id', leadId)
+      .select()
+      .single();
+
+    if (res.error) {
+      res = await supabase
+        .from('leads')
+        .update({
+          status: 'draft',
+          remarks: cleanRemarks,
+        })
+        .eq('id', leadId)
+        .select()
+        .single();
+    }
+
+    if (res.error) throw res.error;
+
+    revalidatePath(`/dashboard/leads/${leadId}`);
+    revalidatePath('/dashboard/leads');
+    revalidatePath('/dashboard');
+    revalidatePath('/dashboard/vendors');
+
+    return { success: true, lead: res.data };
+  } catch (error: any) {
+    console.error('Error reopening RFQ:', error);
+    return { success: false, error: error.message || 'Failed to reopen RFQ' };
   }
 }
 
@@ -622,7 +800,8 @@ export async function sendLeadToVendors(leadId: string, vendorIds: string[]) {
       : new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
     const categoryName = lead.categories?.name || 'General Procurement';
     const companyName = settings?.company_name || 'TECHNOSPHERE BUSINESS SOLUTIONS';
-    const companyAddress = settings?.office_address || (settings as any)?.company_address || '123 Enterprise Park, Tech Hub, Bangalore 560001';
+    const rawAddress = settings?.office_address || (settings as any)?.company_address || '';
+    const companyAddress = rawAddress ? rawAddress.replace(/\r?\n+/g, ', ').replace(/\s+,/g, ',').replace(/,\s*,/g, ',').trim() : '';
     const companyEmail = settings?.official_email || 'sales@technosphere.in';
     const companyPhone = settings?.phone_number || (settings as any)?.official_phone || '+91 98765 43210';
 
@@ -693,10 +872,11 @@ We request your official quotation for the following requirement:
 REQUEST FOR QUOTATION
 =========================================================
 Date Issued: ${createdDate}
-PO Reference No: ${poReference}
+PR Reference No: ${poReference}
 Category: ${categoryName}
 
 RFQ REQUESTED BY:
+Purchase Team
 ${companyName}
 ${companyAddress}
 Email: ${companyEmail} | Phone: ${companyPhone}

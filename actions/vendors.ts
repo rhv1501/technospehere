@@ -2,6 +2,7 @@
 
 import { createAdminClient } from '@/lib/supabase/admin';
 import { revalidatePath } from 'next/cache';
+import { enrichLeadsWithWinningVendor } from './leads';
 
 export interface VendorInput {
   company_name: string;
@@ -310,5 +311,328 @@ export async function rejectVendorRegistration(registrationId: string, reason?: 
   } catch (error: any) {
     console.error('Error rejecting registration:', error);
     return { success: false, error: error.message || 'Failed to reject registration' };
+  }
+}
+
+export interface GetVendorRfqsPaginatedParams {
+  vendorId: string;
+  page?: number;
+  pageSize?: number;
+  filter?: 'all' | 'won';
+}
+
+export async function getVendorRfqsPaginated({
+  vendorId,
+  page = 1,
+  pageSize = 15,
+  filter = 'all',
+}: GetVendorRfqsPaginatedParams) {
+  try {
+    const supabase = createAdminClient();
+
+    // 1. Fetch assigned lead IDs from lead_vendors
+    const { data: leadVendors } = await supabase
+      .from('lead_vendors')
+      .select('lead_id')
+      .eq('vendor_id', vendorId);
+
+    const assignedLeadIds = (leadVendors || []).map((lv: any) => lv.lead_id);
+
+    // 2. Fetch leads where winning_vendor_id = vendorId
+    let winningLeadIds: string[] = [];
+    try {
+      const { data: wonLeads } = await supabase
+        .from('leads')
+        .select('id')
+        .eq('winning_vendor_id', vendorId);
+      if (wonLeads) {
+        winningLeadIds = wonLeads.map((l: any) => l.id);
+      }
+    } catch (e) {}
+
+    // Check if remarks contains winning closure data for this vendor
+    try {
+      const { data: remarksWonLeads } = await supabase
+        .from('leads')
+        .select('id')
+        .ilike('remarks', `%"winning_vendor_id":"${vendorId}"%`);
+      if (remarksWonLeads) {
+        for (const r of remarksWonLeads) {
+          if (!winningLeadIds.includes(r.id)) {
+            winningLeadIds.push(r.id);
+          }
+        }
+      }
+    } catch (e) {}
+
+    const allAssignedOrWonIds = Array.from(new Set([...assignedLeadIds, ...winningLeadIds]));
+    const targetLeadIds = filter === 'won' ? winningLeadIds : allAssignedOrWonIds;
+
+    if (targetLeadIds.length === 0) {
+      // Check fallback in remarks
+      let fallbackQuery = supabase
+        .from('leads')
+        .select(`
+          id,
+          lead_number,
+          lead_name,
+          customer_name,
+          product_item,
+          quantity,
+          status,
+          remarks,
+          specifications,
+          winning_vendor_id,
+          winning_amount,
+          closure_outcome,
+          loss_reason,
+          closure_items,
+          created_at,
+          categories ( id, name )
+        `, { count: 'exact' })
+        .ilike('remarks', `%${vendorId}%`)
+        .order('created_at', { ascending: false });
+
+      if (filter === 'won') {
+        fallbackQuery = fallbackQuery.or(`winning_vendor_id.eq.${vendorId},closure_outcome.eq.win`);
+      }
+
+      const from = Math.max(0, (page - 1) * pageSize);
+      const to = from + pageSize - 1;
+      fallbackQuery = fallbackQuery.range(from, to);
+
+      const { data: fbData, count: fbCount } = await fallbackQuery;
+      const enriched = await enrichLeadsWithWinningVendor(supabase, fbData || []);
+      const totalCount = fbCount ?? 0;
+      const hasMore = to < totalCount - 1;
+
+      return {
+        success: true,
+        rfqs: enriched,
+        totalCount,
+        hasMore,
+        page,
+        pageSize,
+        wonCount: winningLeadIds.length,
+        allCount: allAssignedOrWonIds.length,
+      };
+    }
+
+    const from = Math.max(0, (page - 1) * pageSize);
+    const to = from + pageSize - 1;
+
+    let query = supabase
+      .from('leads')
+      .select(`
+        id,
+        lead_number,
+        lead_name,
+        customer_name,
+        product_item,
+        quantity,
+        status,
+        remarks,
+        specifications,
+        winning_vendor_id,
+        winning_amount,
+        closure_outcome,
+        loss_reason,
+        closure_items,
+        created_at,
+        categories ( id, name )
+      `, { count: 'exact' })
+      .in('id', targetLeadIds)
+      .order('created_at', { ascending: false })
+      .range(from, to);
+
+    const { data, count, error } = await query;
+    if (error) {
+      const { data: fallbackLeads, count: fbCount, error: fbError } = await supabase
+        .from('leads')
+        .select(`
+          id,
+          lead_number,
+          lead_name,
+          customer_name,
+          product_item,
+          quantity,
+          status,
+          remarks,
+          specifications,
+          created_at,
+          categories ( id, name )
+        `, { count: 'exact' })
+        .in('id', targetLeadIds)
+        .order('created_at', { ascending: false })
+        .range(from, to);
+
+      if (fbError) throw fbError;
+      const enriched = await enrichLeadsWithWinningVendor(supabase, fallbackLeads || []);
+      const totalCount = fbCount ?? targetLeadIds.length;
+      const hasMore = to < totalCount - 1;
+
+      return {
+        success: true,
+        rfqs: enriched,
+        totalCount,
+        hasMore,
+        page,
+        pageSize,
+        wonCount: winningLeadIds.length,
+        allCount: allAssignedOrWonIds.length,
+      };
+    }
+
+    const enriched = await enrichLeadsWithWinningVendor(supabase, data || []);
+    const totalCount = count ?? targetLeadIds.length;
+    const hasMore = to < totalCount - 1;
+
+    return {
+      success: true,
+      rfqs: enriched,
+      totalCount,
+      hasMore,
+      page,
+      pageSize,
+      wonCount: winningLeadIds.length,
+      allCount: allAssignedOrWonIds.length,
+    };
+  } catch (error: any) {
+    console.error('Error fetching paginated vendor RFQs:', error);
+    return {
+      success: false,
+      error: error.message || 'Failed to fetch vendor RFQs',
+      rfqs: [],
+      totalCount: 0,
+      hasMore: false,
+      page,
+      pageSize,
+      wonCount: 0,
+      allCount: 0,
+    };
+  }
+}
+
+export async function getVendorRfqs(vendorId: string) {
+  try {
+    const supabase = createAdminClient();
+
+    // 1. Fetch assigned lead IDs from lead_vendors
+    const { data: leadVendors, error: lvError } = await supabase
+      .from('lead_vendors')
+      .select('lead_id, email_sent, whatsapp_prepared, created_at')
+      .eq('vendor_id', vendorId);
+
+    if (lvError) throw lvError;
+
+    const leadIdsFromLv = (leadVendors || []).map((lv: any) => lv.lead_id);
+
+    // 2. Fetch leads where winning_vendor_id = vendorId
+    let winningLeadIds: string[] = [];
+    try {
+      const { data: wonLeads } = await supabase
+        .from('leads')
+        .select('id')
+        .eq('winning_vendor_id', vendorId);
+      if (wonLeads) {
+        winningLeadIds = wonLeads.map((l: any) => l.id);
+      }
+    } catch (e) {
+      // Column may not exist on remote schema yet
+    }
+
+    const allLeadIds = Array.from(new Set([...leadIdsFromLv, ...winningLeadIds]));
+
+    if (allLeadIds.length === 0) {
+      // Also check fallback in remarks
+      const { data: fallbackLeads } = await supabase
+        .from('leads')
+        .select(`
+          id,
+          lead_number,
+          lead_name,
+          customer_name,
+          product_item,
+          quantity,
+          status,
+          remarks,
+          specifications,
+          winning_vendor_id,
+          winning_amount,
+          created_at,
+          categories (
+            id,
+            name
+          )
+        `)
+        .ilike('remarks', `%${vendorId}%`);
+
+      if (fallbackLeads && fallbackLeads.length > 0) {
+        const enriched = await enrichLeadsWithWinningVendor(supabase, fallbackLeads);
+        return { success: true, rfqs: enriched };
+      }
+
+      return { success: true, rfqs: [] };
+    }
+
+    // 3. Fetch full lead details
+    const { data: leads, error: leadsError } = await supabase
+      .from('leads')
+      .select(`
+        id,
+        lead_number,
+        lead_name,
+        customer_name,
+        product_item,
+        quantity,
+        status,
+        remarks,
+        specifications,
+        winning_vendor_id,
+        winning_amount,
+        closure_outcome,
+        loss_reason,
+        closure_items,
+        created_at,
+        categories (
+          id,
+          name
+        )
+      `)
+      .in('id', allLeadIds)
+      .order('created_at', { ascending: false });
+
+    if (leadsError) {
+      const { data: fallbackLeads, error: fbError } = await supabase
+        .from('leads')
+        .select(`
+          id,
+          lead_number,
+          lead_name,
+          customer_name,
+          product_item,
+          quantity,
+          status,
+          remarks,
+          specifications,
+          created_at,
+          categories (
+            id,
+            name
+          )
+        `)
+        .in('id', allLeadIds)
+        .order('created_at', { ascending: false });
+
+      if (fbError) throw fbError;
+      const enriched = await enrichLeadsWithWinningVendor(supabase, fallbackLeads || []);
+      return { success: true, rfqs: enriched };
+    }
+
+    const enriched = await enrichLeadsWithWinningVendor(supabase, leads || []);
+    return { success: true, rfqs: enriched };
+  } catch (error: any) {
+    console.error('Error fetching vendor RFQs:', error);
+    return { success: false, error: error.message || 'Failed to fetch vendor RFQs', rfqs: [] };
   }
 }

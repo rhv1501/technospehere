@@ -39,6 +39,10 @@ import {
   IndianRupee,
   CreditCard,
   UserCheck,
+  Calculator,
+  Undo2,
+  Check,
+  XCircle,
 } from 'lucide-react';
 import {
   assignVendorsToLead,
@@ -49,6 +53,7 @@ import {
   updateLead,
   deleteLead,
   closeAndAwardRfq,
+  reopenLead,
 } from '@/actions/leads';
 import { formatDate, formatCurrency, formatFileSize, fileToBase64, extractPrNumber, formatPrReference } from '@/lib/utils';
 import {
@@ -62,6 +67,9 @@ import {
   EndUserDetails,
   formatEndUserDetailsToComment,
   parseEndUserDetailsFromLead,
+  isLeadWon,
+  isLeadLost,
+  isLeadClosed,
 } from '@/lib/leadUtils';
 import { toast } from 'sonner';
 
@@ -130,18 +138,40 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
   const [uploadLoading, setUploadLoading] = useState(false);
 
   // Template preview state
-  const [templateCustomRemarks, setTemplateCustomRemarks] = useState(lead.remarks || '');
+  const [templateCustomRemarks, setTemplateCustomRemarks] = useState(cleanSpecifications(lead.remarks) || '');
 
   // Step 5 RFQ Closure & Winner Selection state
-  const [selectedWinnerVendorId, setSelectedWinnerVendorId] = useState<string>(lead.winning_vendor_id || '');
-  const [winningAmount, setWinningAmount] = useState<string>(lead.winning_amount ? String(lead.winning_amount) : '');
-  const [closureNotes, setClosureNotes] = useState<string>(lead.closure_notes || '');
-  const [closureStatus, setClosureStatus] = useState<'completed' | 'cancelled'>(
-    lead.status === 'cancelled' ? 'cancelled' : 'completed'
+  const isWon = isLeadWon(lead);
+  const isLost = isLeadLost(lead);
+  const isClosed = isLeadClosed(lead);
+
+  const [closureOutcome, setClosureOutcome] = useState<'win' | 'lost'>(
+    isLost ? 'lost' : 'win'
   );
+  const [selectedWinnerVendorId, setSelectedWinnerVendorId] = useState<string>(lead.winning_vendor_id || '');
+  const [lossReason, setLossReason] = useState<string>(
+    lead.loss_reason || 'Client dropped / cancelled requirement'
+  );
+  const [customLossReason, setCustomLossReason] = useState<string>('');
+  const [closureNotes, setClosureNotes] = useState<string>(lead.closure_notes || '');
   const [closeLoading, setCloseLoading] = useState<boolean>(false);
-  const [showOverrideModal, setShowOverrideModal] = useState<boolean>(false);
-  const [pendingWinnerVendor, setPendingWinnerVendor] = useState<any | null>(null);
+  const [isModifyingClosure, setIsModifyingClosure] = useState<boolean>(false);
+
+  // Line-item prices map (id -> unit price)
+  const [itemPrices, setItemPrices] = useState<Record<string, number | string>>(() => {
+    const initPrices: Record<string, number | string> = {};
+    const parsed = parseLineItemsFromLead(lead);
+    parsed.forEach((it) => {
+      if (it.winning_unit_price != null) {
+        initPrices[it.id] = it.winning_unit_price;
+      } else if (it.unit_price_estimate != null) {
+        initPrices[it.id] = it.unit_price_estimate;
+      } else {
+        initPrices[it.id] = '';
+      }
+    });
+    return initPrices;
+  });
 
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'http://127.0.0.1:54321';
 
@@ -230,76 +260,107 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
     .map((lv: any) => lv.vendors || allVendors.find((v) => v.id === lv.vendor_id))
     .filter(Boolean);
 
-  const isClosedOrAwarded = lead.status === 'completed' || !!lead.winning_vendor_id;
+  const handleItemPriceChange = (itemId: string, val: string) => {
+    setItemPrices((prev) => ({
+      ...prev,
+      [itemId]: val === '' ? '' : Math.max(0, Number(val)),
+    }));
+  };
+
+  const calculatedItemsTotal = lineItems.reduce((acc, item) => {
+    const p = Number(itemPrices[item.id]);
+    if (!isNaN(p) && p > 0) {
+      return acc + (Number(item.quantity) || 1) * p;
+    }
+    return acc;
+  }, 0);
 
   const handleSelectWinnerClick = (vendor: any) => {
-    if (isClosedOrAwarded && lead.winning_vendor_id !== vendor.id) {
-      setPendingWinnerVendor(vendor);
-      setShowOverrideModal(true);
-    } else {
-      setSelectedWinnerVendorId(vendor.id);
-      toast.success(`Selected ${vendor.company_name} as winner!`);
-    }
+    setSelectedWinnerVendorId(vendor.id);
+    toast.success(`Selected ${vendor.company_name} as winning vendor!`);
   };
 
-  const handleConfirmOverride = async () => {
-    if (!pendingWinnerVendor) return;
-    const targetVendor = pendingWinnerVendor;
-    setShowOverrideModal(false);
-    setSelectedWinnerVendorId(targetVendor.id);
-
-    setCloseLoading(true);
-    const res = await closeAndAwardRfq({
-      leadId: lead.id,
-      winningVendorId: targetVendor.id,
-      winningAmount: winningAmount ? Number(winningAmount) : null,
-      closureNotes: closureNotes,
-      status: 'completed',
-    });
-    setCloseLoading(false);
-
-    if (res.success) {
-      toast.success(`Override applied! Updated winning vendor to ${targetVendor.company_name}`);
-      setPendingWinnerVendor(null);
-      router.refresh();
-    } else {
-      toast.error(res.error || 'Failed to override winner');
-    }
-  };
-
-  const handleCloseAndAward = async () => {
-    if (
-      isClosedOrAwarded &&
-      selectedWinnerVendorId &&
-      selectedWinnerVendorId !== lead.winning_vendor_id
-    ) {
-      const vendorObj = allVendors.find((v) => v.id === selectedWinnerVendorId);
-      setPendingWinnerVendor(vendorObj || { id: selectedWinnerVendorId, company_name: 'Selected Vendor' });
-      setShowOverrideModal(true);
+  const handleCloseRfqWin = async () => {
+    if (!selectedWinnerVendorId) {
+      toast.error('Please select the winning vendor to award this purchase order.');
       return;
     }
 
     setCloseLoading(true);
 
+    const itemPricing = lineItems.map((it) => {
+      const uPrice = Number(itemPrices[it.id]) || 0;
+      return {
+        id: it.id,
+        product_item: it.product_item,
+        quantity: Number(it.quantity) || 1,
+        winning_unit_price: uPrice,
+        winning_total: uPrice * (Number(it.quantity) || 1),
+      };
+    });
+
     const res = await closeAndAwardRfq({
       leadId: lead.id,
-      winningVendorId: selectedWinnerVendorId || null,
-      winningAmount: winningAmount ? Number(winningAmount) : null,
+      outcome: 'win',
+      winningVendorId: selectedWinnerVendorId,
+      winningAmount: calculatedItemsTotal,
       closureNotes: closureNotes,
-      status: closureStatus,
+      itemPricing: itemPricing,
+      status: 'completed',
     });
 
     setCloseLoading(false);
 
     if (res.success) {
-      toast.success(
-        closureStatus === 'completed'
-          ? 'RFQ successfully marked as closed & awarded!'
-          : 'RFQ marked as cancelled.'
-      );
+      toast.success('RFQ successfully closed and awarded as WON!');
+      setIsModifyingClosure(false);
       router.refresh();
     } else {
-      toast.error(res.error || 'Failed to update RFQ closure status');
+      toast.error(res.error || 'Failed to close RFQ as Won');
+    }
+  };
+
+  const handleCloseRfqLost = async () => {
+    const finalReason = lossReason === 'Other' ? (customLossReason.trim() || 'Other') : lossReason;
+
+    setCloseLoading(true);
+
+    const res = await closeAndAwardRfq({
+      leadId: lead.id,
+      outcome: 'lost',
+      winningVendorId: null,
+      winningAmount: null,
+      lossReason: finalReason,
+      closureNotes: closureNotes,
+      status: 'cancelled',
+    });
+
+    setCloseLoading(false);
+
+    if (res.success) {
+      toast.success('RFQ marked as Closed - Lost');
+      setIsModifyingClosure(false);
+      router.refresh();
+    } else {
+      toast.error(res.error || 'Failed to mark RFQ as Lost');
+    }
+  };
+
+  const handleReopenRfq = async () => {
+    if (!confirm('Are you sure you want to reopen this RFQ? It will return to active draft status.')) {
+      return;
+    }
+
+    setCloseLoading(true);
+    const res = await reopenLead(lead.id);
+    setCloseLoading(false);
+
+    if (res.success) {
+      toast.success('RFQ has been reopened as active draft');
+      setIsModifyingClosure(false);
+      router.refresh();
+    } else {
+      toast.error(res.error || 'Failed to reopen RFQ');
     }
   };
 
@@ -432,7 +493,7 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
     e.preventDefault();
 
     if (!editFormData.customer_name?.trim() || !editFormData.lead_name?.trim()) {
-      toast.error('Please enter Customer Name and Lead/PO Reference Number');
+      toast.error('Please enter Customer Name and Lead/PR Reference Number');
       return;
     }
 
@@ -527,10 +588,15 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
               <span className="font-mono text-indigo-700 dark:text-indigo-400 font-extrabold text-xs bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-500/30 px-2.5 py-1 rounded-md">
                 {lead.lead_number}
               </span>
-              {lead.winning_vendor_id || lead.status === 'completed' ? (
+              {isWon ? (
                 <span className="px-3 py-1 rounded-full bg-gradient-to-r from-amber-100 to-amber-200 dark:from-amber-950 dark:to-amber-900/80 text-amber-900 dark:text-amber-300 text-xs font-black border border-amber-300 dark:border-amber-700 flex items-center space-x-1.5 shadow-xs">
                   <Trophy className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
-                  <span>Winner: {winningVendor?.company_name || 'Awarded'}</span>
+                  <span>Awarded: {winningVendor?.company_name || 'Awarded'}</span>
+                </span>
+              ) : isLost ? (
+                <span className="px-3 py-1 rounded-full bg-rose-50 dark:bg-rose-950/80 text-rose-800 dark:text-rose-300 text-xs font-black border border-rose-300 dark:border-rose-700 flex items-center space-x-1.5 shadow-xs">
+                  <XCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0" />
+                  <span>Closed - Lost{lead.loss_reason ? `: ${lead.loss_reason}` : ''}</span>
                 </span>
               ) : (
                 <span
@@ -702,7 +768,7 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
             <span className="w-5 h-5 rounded-full bg-amber-500 text-white dark:bg-amber-600/50 dark:text-amber-100 text-[10px] font-black flex items-center justify-center">
               5
             </span>
-            <span>Step 5 — Close RFQ & Select Winner</span>
+            <span>Step 5 — Close RFQ (Win / Lost)</span>
           </button>
         </div>
       </div>
@@ -710,7 +776,7 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
       {/* TAB 1: LEAD SPECIFICATIONS & ATTACHMENTS (DEFAULT READ ONLY WITH INLINE EDIT) */}
       {activeTab === 'overview' && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {(winningVendor || lead.winning_vendor_id || lead.status === 'completed') && (
+          {isWon && (
             <div className="lg:col-span-3 p-5 bg-gradient-to-r from-amber-50 via-emerald-50 to-indigo-50 dark:from-amber-950/40 dark:via-emerald-950/40 dark:to-indigo-950/40 border-2 border-amber-300/80 dark:border-amber-600/50 rounded-2xl shadow-sm flex items-center justify-between flex-wrap gap-4">
               <div className="flex items-center space-x-3">
                 <div className="p-3 bg-amber-500 text-white rounded-xl shadow-xs">
@@ -718,7 +784,7 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
                 </div>
                 <div>
                   <div className="text-xs font-black uppercase tracking-wider text-amber-900 dark:text-amber-300">
-                    RFQ Closed & Awarded Winner
+                    RFQ Closed & Awarded (Won)
                   </div>
                   <div className="text-base font-black text-slate-900 dark:text-slate-100 mt-0.5">
                     {winningVendor?.company_name || 'Awarded Vendor'}{' '}
@@ -748,9 +814,39 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
                   className="px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold transition-all shadow-xs flex items-center space-x-1"
                 >
                   <Trophy className="w-3.5 h-3.5" />
-                  <span>View Closure Details</span>
+                  <span>View Award Details</span>
                 </button>
               </div>
+            </div>
+          )}
+
+          {isLost && (
+            <div className="lg:col-span-3 p-5 bg-gradient-to-r from-rose-50 via-slate-50 to-amber-50 dark:from-rose-950/40 dark:via-slate-900/40 dark:to-amber-950/40 border-2 border-rose-300/80 dark:border-rose-700/60 rounded-2xl shadow-sm flex items-center justify-between flex-wrap gap-4">
+              <div className="flex items-center space-x-3">
+                <div className="p-3 bg-rose-600 text-white rounded-xl shadow-xs">
+                  <XCircle className="w-6 h-6" />
+                </div>
+                <div>
+                  <div className="text-xs font-black uppercase tracking-wider text-rose-900 dark:text-rose-300">
+                    RFQ Closed as Lost
+                  </div>
+                  <div className="text-base font-black text-slate-900 dark:text-slate-100 mt-0.5">
+                    Reason: {lead.loss_reason || 'Client cancelled requirement'}
+                  </div>
+                  {lead.closure_notes && (
+                    <div className="text-xs text-slate-600 dark:text-slate-400 mt-0.5 font-medium">
+                      {lead.closure_notes}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <button
+                onClick={() => setActiveTab('step5')}
+                className="px-3.5 py-2 rounded-xl bg-slate-900 dark:bg-slate-800 hover:bg-slate-800 text-white text-xs font-bold transition-all shadow-xs flex items-center space-x-1"
+              >
+                <span>View Closure Details</span>
+              </button>
             </div>
           )}
 
@@ -941,7 +1037,7 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
                     Remarks & Special Notes
                   </span>
                   <div className="bg-slate-50 dark:bg-slate-900 p-3 rounded-xl border border-slate-200 dark:border-slate-800 text-xs text-slate-800 dark:text-slate-300 font-medium">
-                    {lead.remarks || 'No remarks added.'}
+                    {cleanSpecifications(lead.remarks) || 'No remarks added.'}
                   </div>
                 </div>
               </div>
@@ -1773,7 +1869,7 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
         </div>
       )}
 
-      {/* TAB 4: STEP 5 — CLOSE RFQ & AWARD WINNING VENDOR */}
+      {/* TAB 4: STEP 5 — CLOSE RFQ (WIN / LOST) */}
       {activeTab === 'step5' && (
         <div className="space-y-6 animate-fade-in">
           {/* Step Header Banner */}
@@ -1782,248 +1878,615 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
               <div>
                 <h3 className="text-base font-extrabold text-slate-900 dark:text-slate-100 flex items-center space-x-2">
                   <Trophy className="w-5 h-5 text-amber-500" />
-                  <span>Step 5 — Close RFQ & Award Winning Vendor</span>
+                  <span>Step 5 — RFQ Closure & Purchase Order Award</span>
                 </h3>
                 <p className="text-xs text-slate-500 dark:text-slate-400 font-medium mt-1">
-                  Select the winning vendor for this procurement requirement, record final agreed pricing, and mark the RFQ workflow as completed.
+                  Close this procurement requirement by awarding the Purchase Order to a winning supplier with negotiated item-level pricing, or mark as Lost.
                 </p>
               </div>
 
               <div className="flex items-center space-x-2">
-                {lead.status === 'completed' ? (
+                {isWon ? (
                   <span className="px-3 py-1.5 rounded-xl bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700 text-xs font-black flex items-center space-x-1.5 shadow-xs">
                     <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                    <span>RFQ CLOSED & AWARDED</span>
+                    <span>CLOSED & AWARDED (WON)</span>
+                  </span>
+                ) : isLost ? (
+                  <span className="px-3 py-1.5 rounded-xl bg-rose-100 dark:bg-rose-950/80 text-rose-800 dark:text-rose-300 border border-rose-300 dark:border-rose-700 text-xs font-black flex items-center space-x-1.5 shadow-xs">
+                    <XCircle className="w-4 h-4 text-rose-600 dark:text-rose-400" />
+                    <span>CLOSED AS LOST</span>
                   </span>
                 ) : (
                   <span className="px-3 py-1.5 rounded-xl bg-amber-50 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800 text-xs font-extrabold flex items-center space-x-1.5">
                     <Lock className="w-3.5 h-3.5 text-amber-600" />
-                    <span>Status: {(lead.status || 'draft').toUpperCase()}</span>
+                    <span>Active: {(lead.status || 'draft').toUpperCase()}</span>
                   </span>
                 )}
               </div>
             </div>
 
-            {/* Winning Summary Banner if already closed */}
-            {(winningVendor || lead.winning_vendor_id || lead.status === 'completed') && (
-              <div className="bg-gradient-to-r from-amber-50 via-emerald-50 to-indigo-50 dark:from-amber-950/30 dark:via-emerald-950/30 dark:to-indigo-950/30 border-2 border-amber-300/80 dark:border-amber-600/50 rounded-xl p-5 space-y-3 shadow-md">
-                <div className="flex items-center justify-between flex-wrap gap-2">
-                  <div className="flex items-center space-x-2">
-                    <span className="p-2 rounded-lg bg-amber-500 text-white font-black text-sm shadow-sm">
-                      🏆
-                    </span>
-                    <div>
-                      <h4 className="text-xs font-extrabold uppercase tracking-wider text-amber-900 dark:text-amber-300">
-                        Winning Vendor Awarded
-                      </h4>
-                      <div className="text-lg font-black text-slate-900 dark:text-slate-100 mt-0.5">
-                        {winningVendor?.company_name || 'Awarded Vendor'}
+            {/* IF ALREADY CLOSED AND NOT EDITING/MODIFYING: SHOW SUMMARY & ITEM BREAKDOWN */}
+            {isClosed && !isModifyingClosure ? (
+              <div className="space-y-6">
+                {/* Won Executive Summary */}
+                {isWon && (
+                  <div className="bg-gradient-to-r from-amber-50 via-emerald-50 to-indigo-50 dark:from-amber-950/30 dark:via-emerald-950/30 dark:to-indigo-950/30 border-2 border-amber-300/80 dark:border-amber-600/50 rounded-2xl p-6 space-y-5 shadow-md">
+                    <div className="flex items-center justify-between flex-wrap gap-4">
+                      <div className="flex items-center space-x-3">
+                        <span className="p-3 rounded-xl bg-amber-500 text-white font-black text-xl shadow-sm">
+                          🏆
+                        </span>
+                        <div>
+                          <div className="text-xs font-extrabold uppercase tracking-wider text-amber-900 dark:text-amber-300">
+                            Purchase Order Awarded (Won)
+                          </div>
+                          <div className="text-xl font-black text-slate-900 dark:text-slate-100 mt-0.5">
+                            {winningVendor?.company_name || 'Awarded Vendor'}
+                          </div>
+                        </div>
                       </div>
+
+                      <div className="text-right bg-white/80 dark:bg-slate-900/80 px-4 py-2.5 rounded-xl border border-amber-200 dark:border-amber-800">
+                        <div className="text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                          Final Agreed PO Amount
+                        </div>
+                        <div className="text-2xl font-black text-emerald-700 dark:text-emerald-400">
+                          ₹{Number(lead.winning_amount || calculatedItemsTotal || 0).toLocaleString('en-IN')}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-3 border-t border-slate-200/80 dark:border-slate-800/80 text-xs font-medium">
+                      <div>
+                        <span className="text-slate-500 dark:text-slate-400 block text-[11px] font-bold">Contact Person</span>
+                        <span className="text-slate-900 dark:text-slate-200 font-bold">{winningVendor?.contact_person || 'N/A'}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500 dark:text-slate-400 block text-[11px] font-bold">Email & WhatsApp</span>
+                        <span className="text-slate-900 dark:text-slate-200 font-bold">
+                          {winningVendor?.email || 'N/A'} {winningVendor?.whatsapp_number ? `• ${winningVendor.whatsapp_number}` : ''}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500 dark:text-slate-400 block text-[11px] font-bold">Award Date</span>
+                        <span className="text-slate-900 dark:text-slate-200 font-bold">{lead.closed_at ? formatDate(lead.closed_at) : 'N/A'}</span>
+                      </div>
+                    </div>
+
+                    {lead.closure_notes && (
+                      <div className="pt-2 border-t border-slate-200/80 dark:border-slate-800/80 text-xs text-slate-700 dark:text-slate-300 font-medium">
+                        <strong className="text-slate-900 dark:text-slate-100">Closure Notes:</strong> {lead.closure_notes}
+                      </div>
+                    )}
+
+                    {/* Itemized Price Breakdown Table */}
+                    <div className="pt-3 border-t border-slate-200/80 dark:border-slate-800/80 space-y-3">
+                      <div className="flex items-center space-x-2">
+                        <Calculator className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                        <h4 className="text-xs font-extrabold uppercase tracking-wider text-slate-900 dark:text-slate-100">
+                          Awarded Line-Item Price Breakdown
+                        </h4>
+                      </div>
+
+                      <div className="overflow-hidden rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#111827]">
+                        <table className="w-full text-left text-xs">
+                          <thead className="bg-slate-50 dark:bg-[#0d1322] border-b border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 font-semibold text-[11px]">
+                            <tr>
+                              <th className="px-3.5 py-2.5 w-12 text-center">#</th>
+                              <th className="px-3.5 py-2.5">Item Description & Specifications</th>
+                              <th className="px-3.5 py-2.5 text-center w-24">Quantity</th>
+                              <th className="px-3.5 py-2.5 text-right w-36">Agreed Unit Price (₹)</th>
+                              <th className="px-3.5 py-2.5 text-right w-36">Total Amount (₹)</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60 font-medium">
+                            {lineItems.map((item, idx) => {
+                              const uPrice = item.winning_unit_price != null ? item.winning_unit_price : (Number(itemPrices[item.id]) || 0);
+                              const total = item.winning_total != null ? item.winning_total : (uPrice * (Number(item.quantity) || 1));
+
+                              return (
+                                <tr key={item.id} className="hover:bg-slate-50/60 dark:hover:bg-slate-800/40">
+                                  <td className="px-3.5 py-2.5 text-center text-slate-400 font-mono text-[11px]">
+                                    {idx + 1}
+                                  </td>
+                                  <td className="px-3.5 py-2.5">
+                                    <div className="font-bold text-slate-900 dark:text-slate-100">
+                                      {item.product_item}
+                                    </div>
+                                    {item.specifications && (
+                                      <div className="text-[11px] text-slate-500 dark:text-slate-400 line-clamp-1 mt-0.5">
+                                        {item.specifications}
+                                      </div>
+                                    )}
+                                  </td>
+                                  <td className="px-3.5 py-2.5 text-center font-bold text-slate-800 dark:text-slate-200">
+                                    {item.quantity}
+                                  </td>
+                                  <td className="px-3.5 py-2.5 text-right font-mono font-bold text-slate-900 dark:text-slate-100">
+                                    ₹{Number(uPrice).toLocaleString('en-IN')}
+                                  </td>
+                                  <td className="px-3.5 py-2.5 text-right font-mono font-black text-emerald-700 dark:text-emerald-400">
+                                    ₹{Number(total).toLocaleString('en-IN')}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                          <tfoot className="bg-slate-50/80 dark:bg-slate-900/80 border-t border-slate-200 dark:border-slate-800">
+                            <tr>
+                              <td colSpan={4} className="px-3.5 py-2.5 text-right font-extrabold text-slate-700 dark:text-slate-300 uppercase tracking-wider text-[11px]">
+                                Total Purchase Order Value:
+                              </td>
+                              <td className="px-3.5 py-2.5 text-right font-mono font-black text-emerald-700 dark:text-emerald-400 text-sm">
+                                ₹{Number(lead.winning_amount || calculatedItemsTotal || 0).toLocaleString('en-IN')}
+                              </td>
+                            </tr>
+                          </tfoot>
+                        </table>
+                      </div>
+                    </div>
+
+                    {/* Action Controls */}
+                    <div className="flex items-center justify-end space-x-3 pt-3 border-t border-slate-200/80 dark:border-slate-800/80">
+                      <button
+                        type="button"
+                        onClick={handleReopenRfq}
+                        disabled={closeLoading}
+                        className="px-4 py-2 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 hover:bg-slate-50 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-bold flex items-center space-x-1.5 transition-colors"
+                      >
+                        <Undo2 className="w-3.5 h-3.5" />
+                        <span>Reopen RFQ</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setIsModifyingClosure(true)}
+                        className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-extrabold flex items-center space-x-1.5 shadow-sm transition-all"
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
+                        <span>Modify Award Details</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Lost Executive Summary */}
+                {isLost && (
+                  <div className="bg-gradient-to-r from-rose-50 via-slate-50 to-amber-50 dark:from-rose-950/40 dark:via-slate-900/40 dark:to-amber-950/40 border-2 border-rose-300/80 dark:border-rose-700/60 rounded-2xl p-6 space-y-4 shadow-md">
+                    <div className="flex items-center space-x-3">
+                      <div className="p-3 bg-rose-600 text-white rounded-xl shadow-xs">
+                        <XCircle className="w-6 h-6" />
+                      </div>
+                      <div>
+                        <div className="text-xs font-black uppercase tracking-wider text-rose-900 dark:text-rose-300">
+                          RFQ Closed as Lost
+                        </div>
+                        <div className="text-lg font-black text-slate-900 dark:text-slate-100 mt-0.5">
+                          Reason: {lead.loss_reason || 'Client dropped / cancelled requirement'}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-3 border-t border-slate-200/80 dark:border-slate-800/80 text-xs font-medium">
+                      <div>
+                        <span className="text-slate-500 dark:text-slate-400 block text-[11px] font-bold">Closure Date</span>
+                        <span className="text-slate-900 dark:text-slate-200 font-bold">{lead.closed_at ? formatDate(lead.closed_at) : 'N/A'}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500 dark:text-slate-400 block text-[11px] font-bold">Status</span>
+                        <span className="text-rose-700 dark:text-rose-400 font-extrabold">Cancelled / Closed Lost</span>
+                      </div>
+                    </div>
+
+                    {lead.closure_notes && (
+                      <div className="pt-2 border-t border-slate-200/80 dark:border-slate-800/80 text-xs text-slate-700 dark:text-slate-300 font-medium">
+                        <strong className="text-slate-900 dark:text-slate-100">Context Notes:</strong> {lead.closure_notes}
+                      </div>
+                    )}
+
+                    {/* Action Controls */}
+                    <div className="flex items-center justify-end space-x-3 pt-3 border-t border-slate-200/80 dark:border-slate-800/80">
+                      <button
+                        type="button"
+                        onClick={handleReopenRfq}
+                        disabled={closeLoading}
+                        className="px-4 py-2 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 hover:bg-slate-50 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-bold flex items-center space-x-1.5 transition-colors"
+                      >
+                        <Undo2 className="w-3.5 h-3.5" />
+                        <span>Reopen RFQ</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setIsModifyingClosure(true)}
+                        className="px-4 py-2 bg-slate-900 dark:bg-slate-800 hover:bg-slate-800 text-white rounded-xl text-xs font-extrabold flex items-center space-x-1.5 shadow-sm transition-all"
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
+                        <span>Modify Loss Details</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              /* CLOSURE FORM: DUAL PATHWAY SELECTOR (WIN VS LOST) */
+              <div className="space-y-6">
+                {isModifyingClosure && (
+                  <div className="flex items-center justify-between p-3.5 bg-amber-50 dark:bg-amber-950/50 border border-amber-300 dark:border-amber-700 rounded-xl text-xs text-amber-900 dark:text-amber-200 font-bold">
+                    <div className="flex items-center space-x-2">
+                      <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                      <span>Modifying existing closure details for this RFQ.</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setIsModifyingClosure(false)}
+                      className="px-2.5 py-1 bg-white dark:bg-slate-900 border border-amber-300 dark:border-amber-700 rounded-lg text-[11px] hover:bg-amber-100 transition-colors"
+                    >
+                      Cancel Modification
+                    </button>
+                  </div>
+                )}
+
+                {/* DUAL PATHWAY SELECTOR CARDS */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Card 1: Win & Award PO */}
+                  <div
+                    onClick={() => setClosureOutcome('win')}
+                    className={`cursor-pointer p-5 rounded-2xl border-2 transition-all space-y-2 relative ${
+                      closureOutcome === 'win'
+                        ? 'bg-amber-50/80 dark:bg-amber-950/40 border-amber-500 dark:border-amber-500 shadow-md ring-2 ring-amber-500/20'
+                        : 'bg-white dark:bg-slate-900/60 border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center space-x-3">
+                        <div className={`p-2.5 rounded-xl font-bold ${closureOutcome === 'win' ? 'bg-amber-500 text-white' : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400'}`}>
+                          <Trophy className="w-5 h-5" />
+                        </div>
+                        <div>
+                          <h4 className="font-extrabold text-sm text-slate-900 dark:text-slate-100">
+                            Option 1: Win & Award PO
+                          </h4>
+                          <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                            Award to winning vendor with itemized unit pricing
+                          </p>
+                        </div>
+                      </div>
+
+                      {closureOutcome === 'win' && (
+                        <span className="p-1 rounded-full bg-amber-500 text-white">
+                          <Check className="w-3.5 h-3.5" />
+                        </span>
+                      )}
                     </div>
                   </div>
 
-                  {lead.winning_amount && (
-                    <div className="text-right">
-                      <div className="text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
-                        Final Agreed Amount
+                  {/* Card 2: Mark as Lost */}
+                  <div
+                    onClick={() => setClosureOutcome('lost')}
+                    className={`cursor-pointer p-5 rounded-2xl border-2 transition-all space-y-2 relative ${
+                      closureOutcome === 'lost'
+                        ? 'bg-rose-50/80 dark:bg-rose-950/40 border-rose-500 dark:border-rose-500 shadow-md ring-2 ring-rose-500/20'
+                        : 'bg-white dark:bg-slate-900/60 border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center space-x-3">
+                        <div className={`p-2.5 rounded-xl font-bold ${closureOutcome === 'lost' ? 'bg-rose-600 text-white' : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400'}`}>
+                          <XCircle className="w-5 h-5" />
+                        </div>
+                        <div>
+                          <h4 className="font-extrabold text-sm text-slate-900 dark:text-slate-100">
+                            Option 2: Mark as Lost
+                          </h4>
+                          <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                            Requirement dropped, out of budget, or competitor won
+                          </p>
+                        </div>
                       </div>
-                      <div className="text-xl font-black text-emerald-700 dark:text-emerald-400">
-                        ₹{Number(lead.winning_amount).toLocaleString('en-IN')}
+
+                      {closureOutcome === 'lost' && (
+                        <span className="p-1 rounded-full bg-rose-600 text-white">
+                          <Check className="w-3.5 h-3.5" />
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* FLOW A: WIN & AWARD PATHWAY */}
+                {closureOutcome === 'win' && (
+                  <div className="space-y-6 pt-2">
+                    {/* Section 1: Winning Vendor Selection */}
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <h4 className="text-xs font-extrabold uppercase tracking-wider text-slate-900 dark:text-slate-100 flex items-center space-x-2">
+                          <Award className="w-4 h-4 text-amber-500" />
+                          <span>1. Select Winning Vendor ({assignedVendorsList.length} assigned)</span>
+                        </h4>
+                        {selectedWinnerVendorId && (
+                          <span className="text-xs font-bold text-amber-700 dark:text-amber-400">
+                            Selected: {allVendors.find((v) => v.id === selectedWinnerVendorId)?.company_name}
+                          </span>
+                        )}
+                      </div>
+
+                      {assignedVendorsList.length === 0 ? (
+                        <div className="p-4 text-center text-xs font-medium text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800">
+                          No vendors were assigned. Choose any active vendor using the dropdown below.
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                          {assignedVendorsList.map((vendor: any) => {
+                            const isSelected = selectedWinnerVendorId === vendor.id;
+                            const lvObj = (lead.lead_vendors || []).find((lv: any) => lv.vendor_id === vendor.id);
+
+                            return (
+                              <div
+                                key={vendor.id}
+                                onClick={() => handleSelectWinnerClick(vendor)}
+                                className={`cursor-pointer p-4 rounded-xl border transition-all space-y-2 ${
+                                  isSelected
+                                    ? 'bg-amber-50 dark:bg-amber-950/50 border-amber-400 dark:border-amber-600 shadow-md ring-2 ring-amber-500/20'
+                                    : 'bg-white dark:bg-[#111827] border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700'
+                                }`}
+                              >
+                                <div className="flex items-start justify-between">
+                                  <div>
+                                    <h5 className="font-extrabold text-xs text-slate-900 dark:text-slate-100">
+                                      {vendor.company_name}
+                                    </h5>
+                                    <div className="text-[11px] text-slate-500 dark:text-slate-400 font-medium">
+                                      {vendor.contact_person}
+                                    </div>
+                                  </div>
+                                  {isSelected && (
+                                    <span className="px-2 py-0.5 rounded bg-amber-500 text-white font-black text-[9px] uppercase tracking-wider">
+                                      Winner 🏆
+                                    </span>
+                                  )}
+                                </div>
+
+                                <div className="text-[11px] text-slate-600 dark:text-slate-400 truncate">
+                                  {vendor.email} {vendor.whatsapp_number ? `• ${vendor.whatsapp_number}` : ''}
+                                </div>
+
+                                <div className="flex items-center space-x-1.5 pt-1 text-[9px]">
+                                  <span className={`px-1.5 py-0.5 rounded font-bold ${lvObj?.email_sent ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300' : 'bg-slate-100 text-slate-500'}`}>
+                                    {lvObj?.email_sent ? 'Email Sent' : 'Email Pending'}
+                                  </span>
+                                  <span className={`px-1.5 py-0.5 rounded font-bold ${lvObj?.whatsapp_prepared ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300' : 'bg-slate-100 text-slate-500'}`}>
+                                    {lvObj?.whatsapp_prepared ? 'WA Ready' : 'WA Pending'}
+                                  </span>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {/* Dropdown for any other vendor */}
+                      <div className="pt-2">
+                        <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                          Or select any registered vendor:
+                        </label>
+                        <select
+                          value={selectedWinnerVendorId}
+                          onChange={(e) => setSelectedWinnerVendorId(e.target.value)}
+                          className="w-full sm:w-80 px-3 py-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-bold text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500 cursor-pointer"
+                        >
+                          <option value="">-- Select Winner from Directory --</option>
+                          {allVendors.map((v) => (
+                            <option key={v.id} value={v.id}>
+                              {v.company_name} ({v.contact_person})
+                            </option>
+                          ))}
+                        </select>
                       </div>
                     </div>
-                  )}
-                </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-3 border-t border-slate-200/80 dark:border-slate-800/80 text-xs font-medium">
-                  <div>
-                    <span className="text-slate-500 dark:text-slate-400 block text-[11px] font-bold">Contact Person</span>
-                    <span className="text-slate-900 dark:text-slate-200 font-bold">{winningVendor?.contact_person || 'N/A'}</span>
-                  </div>
-                  <div>
-                    <span className="text-slate-500 dark:text-slate-400 block text-[11px] font-bold">Email & Phone</span>
-                    <span className="text-slate-900 dark:text-slate-200 font-bold">
-                      {winningVendor?.email || 'N/A'} {winningVendor?.whatsapp_number ? `• ${winningVendor.whatsapp_number}` : ''}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-slate-500 dark:text-slate-400 block text-[11px] font-bold">Closure Date</span>
-                    <span className="text-slate-900 dark:text-slate-200 font-bold">{lead.closed_at ? formatDate(lead.closed_at) : 'N/A'}</span>
-                  </div>
-                </div>
+                    {/* Section 2: Line-Item Unit Price Negotiation Table */}
+                    <div className="space-y-3 pt-4 border-t border-slate-200 dark:border-slate-800">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                        <div>
+                          <h4 className="text-xs font-extrabold uppercase tracking-wider text-slate-900 dark:text-slate-100 flex items-center space-x-2">
+                            <Calculator className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                            <span>2. Enter Agreed Unit Prices for Line Items ({lineItems.length})</span>
+                          </h4>
+                          <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                            Enter the negotiated price per unit. Total PO amount is automatically calculated from item pricing.
+                          </p>
+                        </div>
 
-                {lead.closure_notes && (
-                  <div className="pt-2 border-t border-slate-200/80 dark:border-slate-800/80 text-xs text-slate-700 dark:text-slate-300 font-medium">
-                    <strong className="text-slate-900 dark:text-slate-100">Closure Notes:</strong> {lead.closure_notes}
+                        {/* Live Total Badge */}
+                        <div className="bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-300 dark:border-emerald-700/80 px-4 py-2 rounded-xl text-right shrink-0">
+                          <span className="text-[10px] uppercase font-bold text-emerald-800 dark:text-emerald-300 block">
+                            Calculated Final PO Amount:
+                          </span>
+                          <span className="text-base font-black text-emerald-700 dark:text-emerald-400 font-mono">
+                            ₹{calculatedItemsTotal.toLocaleString('en-IN')}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="overflow-hidden rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#111827]">
+                        <table className="w-full text-left text-xs">
+                          <thead className="bg-slate-50 dark:bg-[#0d1322] border-b border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 font-semibold text-[11px]">
+                            <tr>
+                              <th className="px-3.5 py-2.5 w-10 text-center">#</th>
+                              <th className="px-3.5 py-2.5">Item Description & Specs</th>
+                              <th className="px-3.5 py-2.5 text-center w-20">Qty</th>
+                              <th className="px-3.5 py-2.5 text-right w-28">Est. Unit (₹)</th>
+                              <th className="px-3.5 py-2.5 text-right w-44">Agreed Unit Price (₹)</th>
+                              <th className="px-3.5 py-2.5 text-right w-36">Line Total (₹)</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60 font-medium">
+                            {lineItems.map((item, idx) => {
+                              const qty = Number(item.quantity) || 1;
+                              const currentVal = itemPrices[item.id] !== undefined ? itemPrices[item.id] : '';
+                              const numericPrice = Number(currentVal) || 0;
+                              const lineTotal = numericPrice * qty;
+
+                              return (
+                                <tr key={item.id} className="hover:bg-slate-50/60 dark:hover:bg-slate-800/40">
+                                  <td className="px-3.5 py-2.5 text-center text-slate-400 font-mono text-[11px]">
+                                    {idx + 1}
+                                  </td>
+                                  <td className="px-3.5 py-2.5">
+                                    <div className="font-bold text-slate-900 dark:text-slate-100">
+                                      {item.product_item}
+                                    </div>
+                                    {item.specifications && (
+                                      <div className="text-[11px] text-slate-500 dark:text-slate-400 line-clamp-1 mt-0.5">
+                                        {item.specifications}
+                                      </div>
+                                    )}
+                                  </td>
+                                  <td className="px-3.5 py-2.5 text-center font-bold text-slate-800 dark:text-slate-200">
+                                    {qty}
+                                  </td>
+                                  <td className="px-3.5 py-2.5 text-right font-mono text-slate-400 text-[11px]">
+                                    {item.unit_price_estimate != null ? `₹${Number(item.unit_price_estimate).toLocaleString('en-IN')}` : '—'}
+                                  </td>
+                                  <td className="px-3.5 py-2.5 text-right">
+                                    <div className="relative inline-block w-full max-w-[150px]">
+                                      <IndianRupee className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
+                                      <input
+                                        type="number"
+                                        min="0"
+                                        step="any"
+                                        placeholder="Unit Price"
+                                        value={currentVal}
+                                        onChange={(e) => handleItemPriceChange(item.id, e.target.value)}
+                                        className="w-full pl-7 pr-2 py-1.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-xs font-bold text-right text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-500 focus:bg-white dark:focus:bg-slate-950 font-mono"
+                                      />
+                                    </div>
+                                  </td>
+                                  <td className="px-3.5 py-2.5 text-right font-mono font-black text-emerald-700 dark:text-emerald-400">
+                                    ₹{lineTotal.toLocaleString('en-IN')}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                          <tfoot className="bg-slate-50/80 dark:bg-slate-900/80 border-t border-slate-200 dark:border-slate-800">
+                            <tr>
+                              <td colSpan={5} className="px-3.5 py-3 text-right font-extrabold text-slate-700 dark:text-slate-300 uppercase tracking-wider text-xs">
+                                Grand Total (Calculated PO Value):
+                              </td>
+                              <td className="px-3.5 py-3 text-right font-mono font-black text-emerald-700 dark:text-emerald-400 text-sm">
+                                ₹{calculatedItemsTotal.toLocaleString('en-IN')}
+                              </td>
+                            </tr>
+                          </tfoot>
+                        </table>
+                      </div>
+                    </div>
+
+                    {/* Section 3: Closure Notes */}
+                    <div className="space-y-2 pt-4 border-t border-slate-200 dark:border-slate-800">
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">
+                        3. Closure Notes & Negotiation Terms
+                      </label>
+                      <textarea
+                        rows={3}
+                        placeholder="e.g. Vendor agreed to 30-day credit, 7-day delivery timeline, and 1-year standard OEM warranty..."
+                        value={closureNotes}
+                        onChange={(e) => setClosureNotes(e.target.value)}
+                        className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-medium text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500 leading-relaxed"
+                      />
+                    </div>
+
+                    {/* Section 4: Award Submit Button */}
+                    <div className="pt-2">
+                      <button
+                        type="button"
+                        onClick={handleCloseRfqWin}
+                        disabled={closeLoading || !selectedWinnerVendorId}
+                        className="w-full py-3.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl font-extrabold text-xs shadow-lg shadow-amber-500/30 flex items-center justify-center space-x-2 disabled:opacity-50 transition-all hover:scale-[1.005] active:scale-[0.995] cursor-pointer"
+                      >
+                        {closeLoading ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <Trophy className="w-4 h-4" />
+                        )}
+                        <span>🏆 Close RFQ & Award Purchase Order (₹{calculatedItemsTotal.toLocaleString('en-IN')})</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* FLOW B: LOST PATHWAY */}
+                {closureOutcome === 'lost' && (
+                  <div className="space-y-6 pt-2">
+                    <div className="space-y-4 bg-rose-50/40 dark:bg-rose-950/20 p-5 rounded-2xl border border-rose-200/80 dark:border-rose-900/60">
+                      <div>
+                        <h4 className="text-xs font-extrabold uppercase tracking-wider text-rose-900 dark:text-rose-300 flex items-center space-x-2">
+                          <XCircle className="w-4 h-4 text-rose-600" />
+                          <span>1. Primary Reason for RFQ Loss</span>
+                        </h4>
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+                          Capture structured loss intelligence to improve vendor sourcing and pricing accuracy.
+                        </p>
+                      </div>
+
+                      <div className="space-y-3">
+                        <select
+                          value={lossReason}
+                          onChange={(e) => setLossReason(e.target.value)}
+                          className="w-full px-3.5 py-2.5 bg-white dark:bg-slate-950 border border-rose-200 dark:border-rose-900/80 rounded-xl text-xs font-bold text-slate-900 dark:text-slate-100 focus:outline-none focus:border-rose-500 cursor-pointer"
+                        >
+                          <option value="Client dropped / cancelled requirement">Client dropped / cancelled requirement</option>
+                          <option value="Price too high / outside client budget">Price too high / outside client budget</option>
+                          <option value="Lost to competitor / alternative vendor">Lost to competitor / alternative vendor</option>
+                          <option value="Delivery timeline too long">Delivery timeline too long</option>
+                          <option value="Technical specifications could not be met">Technical specifications could not be met</option>
+                          <option value="Vendor unable to supply requested quantity">Vendor unable to supply requested quantity</option>
+                          <option value="Other">Other (Custom reason)</option>
+                        </select>
+
+                        {lossReason === 'Other' && (
+                          <input
+                            type="text"
+                            placeholder="Specify custom loss reason..."
+                            value={customLossReason}
+                            onChange={(e) => setCustomLossReason(e.target.value)}
+                            className="w-full px-3.5 py-2 bg-white dark:bg-slate-950 border border-rose-200 dark:border-rose-900/80 rounded-xl text-xs font-medium text-slate-900 dark:text-slate-100 focus:outline-none focus:border-rose-500"
+                          />
+                        )}
+                      </div>
+
+                      <div className="space-y-2 pt-2 border-t border-rose-200/60 dark:border-rose-900/40">
+                        <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">
+                          2. Loss Context & Notes
+                        </label>
+                        <textarea
+                          rows={3}
+                          placeholder="Provide details on client feedback, competitor pricing if known, or internal learnings..."
+                          value={closureNotes}
+                          onChange={(e) => setClosureNotes(e.target.value)}
+                          className="w-full px-3 py-2 bg-white dark:bg-slate-950 border border-rose-200 dark:border-rose-900/80 rounded-xl text-xs font-medium text-slate-900 dark:text-slate-100 focus:outline-none focus:border-rose-500 leading-relaxed"
+                        />
+                      </div>
+
+                      {/* Lost Submit Button */}
+                      <button
+                        type="button"
+                        onClick={handleCloseRfqLost}
+                        disabled={closeLoading}
+                        className="w-full py-3.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-extrabold text-xs shadow-lg shadow-rose-600/30 flex items-center justify-center space-x-2 disabled:opacity-50 transition-all hover:scale-[1.005] active:scale-[0.995] cursor-pointer"
+                      >
+                        {closeLoading ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <XCircle className="w-4 h-4" />
+                        )}
+                        <span>❌ Close RFQ as Lost</span>
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>
             )}
-
-            {/* Main Grid: Vendor Selection Cards & Closure Form */}
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 pt-2">
-              {/* Left 2 Cols: Interactive Assigned Vendors Cards */}
-              <div className="lg:col-span-2 space-y-4">
-                <h4 className="text-xs font-extrabold uppercase tracking-wider text-slate-800 dark:text-slate-200 flex items-center space-x-2">
-                  <Award className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-                  <span>Select Winning Vendor from Assigned Vendors ({assignedVendorsList.length})</span>
-                </h4>
-
-                {assignedVendorsList.length === 0 ? (
-                  <div className="p-6 text-center text-xs font-semibold text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800">
-                    No vendors were assigned to this lead. You can select any active vendor from the dropdown on the right.
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {assignedVendorsList.map((vendor: any) => {
-                      const isSelectedWinner = selectedWinnerVendorId === vendor.id;
-                      const leadVendorObj = (lead.lead_vendors || []).find((lv: any) => lv.vendor_id === vendor.id);
-
-                      return (
-                        <div
-                          key={vendor.id}
-                          className={`p-4 rounded-xl border transition-all space-y-3 relative ${
-                            isSelectedWinner
-                              ? 'bg-amber-50/70 dark:bg-amber-950/40 border-amber-400 dark:border-amber-600 shadow-md ring-2 ring-amber-500/20'
-                              : 'bg-slate-50/60 dark:bg-slate-900/50 border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700'
-                          }`}
-                        >
-                          <div className="flex items-start justify-between">
-                            <div>
-                              <h5 className="font-extrabold text-sm text-slate-900 dark:text-slate-100">
-                                {vendor.company_name}
-                              </h5>
-                              <div className="text-xs text-slate-500 dark:text-slate-400 font-medium mt-0.5">
-                                {vendor.contact_person}
-                              </div>
-                            </div>
-                            {isSelectedWinner && (
-                              <span className="px-2 py-0.5 rounded-md bg-amber-500 text-white font-black text-[10px] uppercase tracking-wider flex items-center space-x-1 shadow-xs">
-                                <span>🏆 Winner</span>
-                              </span>
-                            )}
-                          </div>
-
-                          <div className="space-y-1 text-xs text-slate-600 dark:text-slate-400">
-                            <div>Email: <strong className="text-slate-900 dark:text-slate-200">{vendor.email}</strong></div>
-                            <div>Phone: <strong className="text-slate-900 dark:text-slate-200">{vendor.whatsapp_number}</strong></div>
-                          </div>
-
-                          <div className="flex items-center space-x-2 pt-2 border-t border-slate-200 dark:border-slate-800 text-[10px]">
-                            <span className={`px-2 py-0.5 rounded font-extrabold ${leadVendorObj?.email_sent ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-600'}`}>
-                              {leadVendorObj?.email_sent ? 'Email Sent' : 'Email Pending'}
-                            </span>
-                            <span className={`px-2 py-0.5 rounded font-extrabold ${leadVendorObj?.whatsapp_prepared ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-600'}`}>
-                              {leadVendorObj?.whatsapp_prepared ? 'WA Prepared' : 'WA Pending'}
-                            </span>
-                          </div>
-
-                          <button
-                            type="button"
-                            onClick={() => handleSelectWinnerClick(vendor)}
-                            className={`w-full py-2 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center space-x-1.5 ${
-                              isSelectedWinner
-                                ? 'bg-amber-500 text-white shadow-md'
-                                : 'bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-amber-50 dark:hover:bg-amber-950/40 hover:text-amber-700'
-                            }`}
-                          >
-                            <Trophy className="w-3.5 h-3.5" />
-                            <span>{isSelectedWinner ? 'Selected Winner' : 'Mark as Winner'}</span>
-                          </button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-
-              {/* Right Col: Closure Form Details */}
-              <div className="space-y-4 bg-slate-50 dark:bg-slate-900/60 p-5 rounded-2xl border border-slate-200 dark:border-slate-800">
-                <h4 className="text-xs font-extrabold uppercase tracking-wider text-slate-900 dark:text-slate-100 pb-2 border-b border-slate-200 dark:border-slate-800 flex items-center space-x-2">
-                  <Lock className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-                  <span>RFQ Closure Form</span>
-                </h4>
-
-                {/* Select Winner Dropdown */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Select Winning Vendor
-                  </label>
-                  <select
-                    value={selectedWinnerVendorId}
-                    onChange={(e) => setSelectedWinnerVendorId(e.target.value)}
-                    className="w-full px-3 py-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-bold text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500 cursor-pointer"
-                  >
-                    <option value="">-- No Vendor / Select Winner --</option>
-                    {allVendors.map((v) => (
-                      <option key={v.id} value={v.id}>
-                        {v.company_name} ({v.contact_person})
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* Final Winning Amount */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Final Agreed Amount (₹ INR)
-                  </label>
-                  <div className="relative">
-                    <IndianRupee className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
-                    <input
-                      type="number"
-                      placeholder="e.g. 150000"
-                      value={winningAmount}
-                      onChange={(e) => setWinningAmount(e.target.value)}
-                      className="w-full pl-9 pr-3 py-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-bold text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500"
-                    />
-                  </div>
-                </div>
-
-                {/* Closure Status */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Workflow Status
-                  </label>
-                  <select
-                    value={closureStatus}
-                    onChange={(e) => setClosureStatus(e.target.value as any)}
-                    className="w-full px-3 py-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-bold text-emerald-700 dark:text-emerald-400 focus:outline-none focus:border-indigo-500 cursor-pointer"
-                  >
-                    <option value="completed">Completed (Closed & Awarded)</option>
-                    <option value="cancelled">Cancelled (Closed without Award)</option>
-                  </select>
-                </div>
-
-                {/* Closure Notes */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Closure Notes & Selection Remarks
-                  </label>
-                  <textarea
-                    rows={3}
-                    placeholder="e.g. Vendor provided best pricing and 7-day dispatch timeline..."
-                    value={closureNotes}
-                    onChange={(e) => setClosureNotes(e.target.value)}
-                    className="w-full px-3 py-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-medium text-slate-900 dark:text-slate-100 focus:outline-none focus:border-indigo-500 leading-relaxed"
-                  />
-                </div>
-
-                {/* Save Action Button */}
-                <button
-                  type="button"
-                  onClick={handleCloseAndAward}
-                  disabled={closeLoading}
-                  className="w-full py-3 bg-amber-500 hover:bg-amber-600 text-white rounded-xl font-extrabold text-xs shadow-lg shadow-amber-500/30 flex items-center justify-center space-x-2 disabled:opacity-50 transition-all hover:scale-[1.01] active:scale-[0.99]"
-                >
-                  {closeLoading ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <Trophy className="w-4 h-4" />
-                  )}
-                  <span>🏆 Save Closure & Award Vendor</span>
-                </button>
-              </div>
-            </div>
           </div>
         </div>
       )}
@@ -2068,63 +2531,6 @@ export function LeadDetailsView({ lead, categories, allVendors }: LeadDetailsVie
                   <Trash2 className="w-4 h-4" />
                 )}
                 <span>Delete RFQ Permanently</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-      {/* OVERRIDE WINNING VENDOR CONFIRMATION MODAL */}
-      {showOverrideModal && pendingWinnerVendor && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-fade-in">
-          <div className="bg-white dark:bg-[#111827] border border-amber-300 dark:border-amber-700/80 rounded-2xl p-6 max-w-md w-full shadow-2xl space-y-4">
-            <div className="flex items-center space-x-3 text-amber-600 dark:text-amber-400">
-              <div className="p-3 bg-amber-50 dark:bg-amber-950/60 rounded-xl border border-amber-200 dark:border-amber-800">
-                <Trophy className="w-6 h-6 text-amber-500" />
-              </div>
-              <div>
-                <h3 className="font-extrabold text-slate-900 dark:text-slate-100 text-base">
-                  RFQ is Already Closed & Awarded
-                </h3>
-                <p className="text-xs text-amber-700 dark:text-amber-400 font-bold">
-                  Override Confirmation Required
-                </p>
-              </div>
-            </div>
-
-            <p className="text-xs text-slate-700 dark:text-slate-300 leading-relaxed font-medium">
-              This RFQ is currently closed with awarded winner{' '}
-              <strong className="text-amber-800 dark:text-amber-300 font-black">
-                {winningVendor?.company_name || 'an existing vendor'}
-              </strong>.
-            </p>
-
-            <p className="text-xs text-slate-700 dark:text-slate-300 leading-relaxed font-medium bg-amber-50 dark:bg-amber-950/40 p-3 rounded-xl border border-amber-200 dark:border-amber-800/60">
-              To replace the current winner with <strong className="text-slate-900 dark:text-slate-100 font-extrabold">{pendingWinnerVendor.company_name}</strong>, click <strong className="text-amber-700 dark:text-amber-300 font-black">Override & Award Winner</strong> below.
-            </p>
-
-            <div className="flex items-center justify-end space-x-3 pt-3 border-t border-slate-200 dark:border-slate-800">
-              <button
-                type="button"
-                onClick={() => {
-                  setShowOverrideModal(false);
-                  setPendingWinnerVendor(null);
-                }}
-                className="px-4 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-extrabold transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleConfirmOverride}
-                disabled={closeLoading}
-                className="px-5 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-extrabold flex items-center space-x-2 shadow-md shadow-amber-500/30 disabled:opacity-50 transition-all"
-              >
-                {closeLoading ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                ) : (
-                  <Trophy className="w-4 h-4" />
-                )}
-                <span>Override & Award Winner</span>
               </button>
             </div>
           </div>

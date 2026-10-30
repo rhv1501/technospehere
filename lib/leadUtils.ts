@@ -4,6 +4,26 @@ export interface LeadLineItem {
   quantity: number;
   unit_price_estimate?: number;
   specifications?: string;
+  winning_unit_price?: number;
+  winning_total?: number;
+}
+
+export function isLeadWon(lead?: any): boolean {
+  if (!lead) return false;
+  if (lead.closure_outcome === 'lost' || lead.status === 'lost' || (lead.status === 'cancelled' && !lead.winning_vendor_id)) {
+    return false;
+  }
+  return lead.closure_outcome === 'win' || (lead.status === 'completed' && !!lead.winning_vendor_id) || lead.status === 'won';
+}
+
+export function isLeadLost(lead?: any): boolean {
+  if (!lead) return false;
+  return lead.closure_outcome === 'lost' || lead.status === 'lost' || (lead.status === 'cancelled' && !lead.winning_vendor_id);
+}
+
+export function isLeadClosed(lead?: any): boolean {
+  if (!lead) return false;
+  return isLeadWon(lead) || isLeadLost(lead) || lead.status === 'completed' || lead.status === 'cancelled' || !!lead.closed_at;
 }
 
 export interface EndUserDetails {
@@ -45,11 +65,14 @@ export function parseEndUserDetailsFromLead(lead?: { remarks?: string | null; sp
 export function cleanSpecifications(rawSpecs?: string | null): string {
   if (!rawSpecs) return '';
 
-  // 1. Remove JSON comment tags & CLOSURE_DATA blocks
+  // 1. Remove JSON comment tags & CLOSURE_DATA / metadata blocks
   let clean = rawSpecs
-    .replace(/<!-- LINE_ITEMS_JSON:[\s\S]*?-->/g, '')
-    .replace(/<!-- END_USER_DETAILS:[\s\S]*?-->/g, '')
-    .replace(/\[\[CLOSURE_DATA:[\s\S]*?\]\]/g, '')
+    .replace(/<!--\s*LINE_ITEMS_JSON:[\s\S]*?-->/gi, '')
+    .replace(/<!--\s*END_USER_DETAILS:[\s\S]*?-->/gi, '')
+    .replace(/<!--\s*CLOSURE_DATA:[\s\S]*?-->/gi, '')
+    .replace(/\[\[CLOSURE_DATA:[\s\S]*?\]\]/gi, '')
+    .replace(/\[\[ITEMS_JSON:[\s\S]*?\]\]/gi, '')
+    .replace(/\[\[END_USER:[\s\S]*?\]\]/gi, '')
     .trim();
 
   // 2. If it contains General Terms & Notes:
@@ -72,19 +95,16 @@ export function cleanSpecifications(rawSpecs?: string | null): string {
   return clean;
 }
 
-export function parseLineItemsFromLead(lead: {
-  product_item: string;
-  quantity: number;
-  unit_price_estimate?: number | null;
-  specifications?: string | null;
-}): LeadLineItem[] {
+export function parseLineItemsFromLead(lead: any): LeadLineItem[] {
+  let items: LeadLineItem[] = [];
+
   if (lead?.specifications && lead.specifications.includes('<!-- LINE_ITEMS_JSON:')) {
     try {
       const match = lead.specifications.match(/<!-- LINE_ITEMS_JSON:\s*([\s\S]*?)\s*-->/);
       if (match && match[1]) {
         const parsed = JSON.parse(match[1]);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed.map((item: any, idx: number) => ({
+          items = parsed.map((item: any, idx: number) => ({
             id: item.id || String(idx + 1),
             product_item: item.product_item || lead.product_item || '',
             quantity: item.quantity || lead.quantity || 1,
@@ -99,12 +119,11 @@ export function parseLineItemsFromLead(lead: {
   }
 
   // Legacy parser if "Line Item #" blocks exist in text without JSON tag
-  if (lead?.specifications && lead.specifications.includes('Line Item #')) {
+  if (items.length === 0 && lead?.specifications && lead.specifications.includes('Line Item #')) {
     const raw = lead.specifications;
-    const blocks = raw.split(/Line Item #\d+:/g).filter((b) => b.trim());
+    const blocks = raw.split(/Line Item #\d+:/g).filter((b: string) => b.trim());
     if (blocks.length > 0) {
-      const items: LeadLineItem[] = [];
-      blocks.forEach((block, idx) => {
+      blocks.forEach((block: string, idx: number) => {
         const lines = block.split('\n');
         const title = lines[0]?.trim() || lead.product_item || 'Item Requirement';
         let qty = 1;
@@ -123,20 +142,53 @@ export function parseLineItemsFromLead(lead: {
           specifications: specs,
         });
       });
-      if (items.length > 0) return items;
     }
   }
 
   // Fallback to single item from lead columns
-  return [
-    {
-      id: '1',
-      product_item: lead?.product_item || '',
-      quantity: lead?.quantity || 1,
-      unit_price_estimate: lead?.unit_price_estimate != null ? Number(lead.unit_price_estimate) : undefined,
-      specifications: cleanSpecifications(lead?.specifications),
-    },
-  ];
+  if (items.length === 0) {
+    items = [
+      {
+        id: '1',
+        product_item: lead?.product_item || '',
+        quantity: lead?.quantity || 1,
+        unit_price_estimate: lead?.unit_price_estimate != null ? Number(lead.unit_price_estimate) : undefined,
+        specifications: cleanSpecifications(lead?.specifications),
+      },
+    ];
+  }
+
+  // Merge in closure_items pricing if present
+  let closureItems = lead?.closure_items;
+  if (!closureItems && lead?.remarks && lead.remarks.includes('[[CLOSURE_DATA:')) {
+    try {
+      const match = lead.remarks.match(/\[\[CLOSURE_DATA:\s*([\s\S]*?)\s*\]\]/);
+      if (match && match[1]) {
+        const parsed = JSON.parse(match[1]);
+        if (parsed.closure_items) closureItems = parsed.closure_items;
+      }
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  if (Array.isArray(closureItems) && closureItems.length > 0) {
+    items = items.map((it) => {
+      const match = closureItems.find((c: any) => String(c.id) === String(it.id));
+      if (match) {
+        const uPrice = match.winning_unit_price != null ? Number(match.winning_unit_price) : undefined;
+        const total = uPrice != null ? uPrice * (Number(it.quantity) || 1) : undefined;
+        return {
+          ...it,
+          winning_unit_price: uPrice,
+          winning_total: match.winning_total != null ? Number(match.winning_total) : total,
+        };
+      }
+      return it;
+    });
+  }
+
+  return items;
 }
 
 /**
@@ -266,7 +318,8 @@ export function generateRfqEmailHtml(params: {
     : new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
   const categoryName = lead.categories?.name || 'General Procurement';
   const companyName = settings?.company_name || 'TECHNOSPHERE BUSINESS SOLUTIONS';
-  const companyAddress = settings?.office_address || settings?.company_address || '123 Enterprise Park, Tech Hub, Bangalore 560001';
+  const rawAddress = settings?.office_address || settings?.company_address || '';
+  const companyAddress = rawAddress ? rawAddress.replace(/\r?\n+/g, ', ').replace(/\s+,/g, ',').replace(/,\s*,/g, ',').trim() : '';
   const companyEmail = settings?.official_email || 'sales@technosphere.in';
   const companyPhone = settings?.phone_number || settings?.official_phone || '+91 98765 43210';
 
@@ -410,7 +463,7 @@ export function generateRfqEmailHtml(params: {
                     <div style="font-size: 14px; font-weight: 700; color: #0F172A; margin-top: 4px;">${createdDate}</div>
                   </td>
                   <td width="33%" class="meta-grid-td" style="padding: 16px 20px; border-right: 1px solid #E2E8F0;">
-                    <div style="font-size: 11px; font-weight: 700; color: #64748B; text-transform: uppercase; letter-spacing: 0.6px;">PO Reference No</div>
+                    <div style="font-size: 11px; font-weight: 700; color: #64748B; text-transform: uppercase; letter-spacing: 0.6px;">PR Reference No</div>
                     <div style="font-size: 14px; font-weight: 800; color: #4338CA; margin-top: 4px;">${poReference}</div>
                   </td>
                   <td width="34%" class="meta-grid-td" style="padding: 16px 20px;">
@@ -425,8 +478,8 @@ export function generateRfqEmailHtml(params: {
                 <tr>
                   <td>
                     <div style="font-size: 11px; font-weight: 800; color: #4338CA; text-transform: uppercase; letter-spacing: 0.6px;">RFQ Requested By</div>
-                    <div style="font-size: 15px; font-weight: 800; color: #1E293B; margin-top: 6px;">${companyName}</div>
-                    <div style="font-size: 13px; color: #475569; margin-top: 4px; line-height: 1.5;">${companyAddress}</div>
+                    <div style="font-size: 15px; font-weight: 800; color: #1E293B; margin-top: 6px;">Purchase Team</div>
+                    <div style="font-size: 13px; color: #475569; margin-top: 4px; line-height: 1.5;">${companyName} &nbsp;|&nbsp; ${companyAddress}</div>
                     <div style="font-size: 13px; color: #475569; margin-top: 4px;">Email: <strong style="color: #1E293B;">${companyEmail}</strong> &nbsp;|&nbsp; Phone: <strong style="color: #1E293B;">${companyPhone}</strong></div>
                   </td>
                 </tr>
@@ -451,25 +504,23 @@ export function generateRfqEmailHtml(params: {
                 </tbody>
               </table>
 
-              ${
-                expectedCredit
-                  ? `<!-- Expected Credit Card -->
+              ${expectedCredit
+      ? `<!-- Expected Credit Card -->
               <div class="card-box" style="background-color: #F0FDF4; border: 1px solid #BBF7D0; border-left: 4px solid #16A34A; border-radius: 8px; padding: 18px 22px; margin-bottom: 32px;">
                 <div style="font-size: 11px; font-weight: 800; color: #15803D; text-transform: uppercase; letter-spacing: 0.6px;">Expected Credit Terms:</div>
                 <div style="font-size: 14px; color: #166534; font-weight: 700; margin-top: 6px; white-space: pre-wrap;">${expectedCredit.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
               </div>`
-                  : ''
-              }
+      : ''
+    }
 
-              ${
-                generalRemarks
-                  ? `<!-- General Remarks Card -->
+              ${generalRemarks
+      ? `<!-- General Remarks Card -->
               <div class="card-box" style="background-color: #FFFBEB; border: 1px solid #FDE68A; border-left: 4px solid #F59E0B; border-radius: 8px; padding: 20px 22px; margin-bottom: 32px;">
                 <div style="font-size: 11px; font-weight: 800; color: #B45309; text-transform: uppercase; letter-spacing: 0.6px;">General Remarks & Terms:</div>
                 <div style="font-size: 14px; color: #78350F; margin-top: 8px; line-height: 1.6; white-space: pre-wrap;">${generalRemarks.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
               </div>`
-                  : ''
-              }
+      : ''
+    }
 
               <!-- Quotation Guidelines Card -->
               <div class="card-box" style="background-color: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 10px; padding: 20px 22px; margin-bottom: 32px;">
@@ -489,16 +540,15 @@ export function generateRfqEmailHtml(params: {
                 <div style="font-size: 13px; color: #64748B; margin-top: 6px; line-height: 1.5;">
                   The official Request for Quotation (RFQ) PDF document (<strong style="color: #0F172A;">${rfqFileName}</strong>) is attached directly to this email.
                 </div>
-                ${
-                  otherAttachments.length > 0
-                    ? `<div style="margin-top: 14px; font-size: 13px; color: #475569; text-align: left; border-top: 1px solid #E2E8F0; padding-top: 12px;">
+                ${otherAttachments.length > 0
+      ? `<div style="margin-top: 14px; font-size: 13px; color: #475569; text-align: left; border-top: 1px solid #E2E8F0; padding-top: 12px;">
                         <strong style="color: #1E293B;">Other Attached Specification Files:</strong>
                         <ul style="margin: 6px 0 0 0; padding-left: 20px; line-height: 1.6;">
                           ${otherAttachments.map((att: any) => `<li><a href="${supabaseUrl}/storage/v1/object/public/lead-attachments/${att.file_path}" style="color: #4338CA; text-decoration: underline; font-weight: 600;">${att.file_name}</a></li>`).join('')}
                         </ul>
                        </div>`
-                    : ''
-                }
+      : ''
+    }
               </div>
 
               <!-- Signature Footer -->

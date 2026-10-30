@@ -172,6 +172,9 @@ export type Database = {
           warranty: string | null
           winning_amount: number | null
           winning_vendor_id: string | null
+          closure_outcome?: 'win' | 'lost' | null
+          loss_reason?: string | null
+          closure_items?: any | null
         }
         Insert: {
           category_id?: string | null
@@ -197,6 +200,9 @@ export type Database = {
           warranty?: string | null
           winning_amount?: number | null
           winning_vendor_id?: string | null
+          closure_outcome?: 'win' | 'lost' | null
+          loss_reason?: string | null
+          closure_items?: any | null
         }
         Update: {
           category_id?: string | null
@@ -222,6 +228,9 @@ export type Database = {
           warranty?: string | null
           winning_amount?: number | null
           winning_vendor_id?: string | null
+          closure_outcome?: 'win' | 'lost' | null
+          loss_reason?: string | null
+          closure_items?: any | null
         }
         Relationships: [
           {

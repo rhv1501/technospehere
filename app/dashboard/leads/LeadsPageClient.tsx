@@ -8,9 +8,13 @@ import { CreateLeadModal } from '@/components/leads/CreateLeadModal';
 
 export function LeadsPageClient({
   initialLeads,
+  initialTotalCount,
+  initialHasMore,
   categories,
 }: {
   initialLeads: any[];
+  initialTotalCount?: number;
+  initialHasMore?: boolean;
   categories: any[];
 }) {
   const router = useRouter();
@@ -40,7 +44,9 @@ export function LeadsPageClient({
       </div>
 
       <LeadsTable
-        leads={initialLeads}
+        initialLeads={initialLeads}
+        initialTotalCount={initialTotalCount}
+        initialHasMore={initialHasMore}
         categories={categories}
         onOpenCreateModal={() => setCreateModalOpen(true)}
       />
